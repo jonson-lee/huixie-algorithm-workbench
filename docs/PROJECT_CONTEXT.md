@@ -1,0 +1,42 @@
+# 项目上下文
+
+## 产品
+
+“回写”是面向算法零基础大学生的免费算法复现工作台。核心闭环不是刷完成数，而是：先看原创解法，再合上答案复述，从空白写代码，运行本地测试，最后按表现安排复习。
+
+当前验证版以 Hot 100 中 13 道代表题为内容范围，目标是验证学习机制；不是完整题库。
+
+## 当前实现
+
+- 单页静态网站，入口在 `dist/index.html`。
+- `dist/problems.js` 保存原创摘要、题解、参考实现、提示、变式和测试。
+- `dist/app.js` 负责训练流程、个性化队列、间隔复习、本地存储及 WebMCP。
+- `dist/pyodide-worker.js` 在模块化 Web Worker 中运行 Python。
+- `dist/pyodide/` 自托管 Pyodide 314.0.6 核心文件及 MPL-2.0 许可证。
+- `dist/service-worker.js` 缓存站点外壳，并在后续请求中缓存同源运行时文件。
+- `.openai/hosting.json` 绑定 Sites 私有托管项目。
+
+学习进度、草稿和设置保存在浏览器 `localStorage`，支持 JSON 导入、导出和清除。不要求账号，不上传代码，不接入 LeetCode 账号或 Cookie。
+
+## 本地验证
+
+在项目根目录运行：
+
+```bash
+node --check dist/app.js
+node --check dist/problems.js
+node --check dist/pyodide-worker.js
+node --check dist/service-worker.js
+node scripts/verify-content.mjs
+python3 -m http.server 4173 --directory dist --bind 127.0.0.1
+```
+
+浏览器验收必须覆盖：新题学习、闭卷复述、编码、本地测试、官方结果标记、复盘、断点续学、390px 手机布局和宽屏布局。
+
+## 内容与品牌边界
+
+- 不抓取、镜像或复制官方题面、示例、题解、测试与品牌视觉。
+- 只保留最低限度的题号、标题、官方链接等引用信息。
+- 教学文字、代码、例子、变式和本地测试保持独立创作。
+- 页面必须持续声明本工具与 LeetCode／力扣无隶属或背书关系。
+- 本地测试只提供学习反馈，最终判定以官方平台提交为准。

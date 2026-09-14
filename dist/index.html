@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="回写是一款面向算法零基础学生的免费算法复现工作台：先理解，再合上答案独立写出来。"
+    />
+    <meta name="theme-color" content="#eef1f4" />
+    <title>回写｜算法复现工作台</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2312161d'/%3E%3Cpath d='M15 20h22c8 0 13 5 13 12s-5 12-13 12H23' fill='none' stroke='%23c7f36b' stroke-width='6' stroke-linecap='square'/%3E%3Cpath d='m28 34-10 10 10 10' fill='none' stroke='%23c7f36b' stroke-width='6' stroke-linecap='square' stroke-linejoin='miter'/%3E%3Ccircle cx='14' cy='20' r='4' fill='%234b68ff'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css?v=4" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <div class="app-shell">
+      <header class="top-rail">
+        <button class="brand" type="button" data-view="today" aria-label="回到今日训练">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>回写</span>
+        </button>
+
+        <nav class="main-nav" aria-label="主导航">
+          <button type="button" data-view="today" aria-current="page">今日</button>
+          <button type="button" data-view="route">路线</button>
+          <button type="button" data-view="progress">进度</button>
+        </nav>
+
+        <div class="top-actions">
+          <span class="local-status"><span aria-hidden="true"></span>仅存本机</span>
+          <button class="quiet-button" type="button" data-view="settings">设置</button>
+        </div>
+      </header>
+
+      <main id="main-content" tabindex="-1">
+        <div id="view-root"></div>
+      </main>
+
+      <footer class="site-footer">
+        <p>回写为独立学习工具，与 LeetCode／力扣无隶属或背书关系。</p>
+        <div class="footer-links">
+          <a href="./THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">开源许可</a>
+          <a href="https://leetcode.cn/problemset/" target="_blank" rel="noreferrer">前往官方题库</a>
+        </div>
+      </footer>
+    </div>
+
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <noscript>
+      <div class="noscript">回写需要 JavaScript 才能保存学习进度和运行本地练习。</div>
+    </noscript>
+
+    <script src="./problems.js?v=3"></script>
+    <script src="./app.js?v=7"></script>
+  </body>
+</html>

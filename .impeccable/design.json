@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 2,
+  "name": "回写",
+  "description": "先理解，再合上答案独立复现的算法学习工作台",
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "description": "石墨底的唯一主行动，悬停时接通黄绿色电流。",
+      "html": "<button class=\"ds-primary-button\">开始今天的训练</button>",
+      "css": ".ds-primary-button { min-height: 46px; padding: 10px 18px; border: 1px solid #12161d; border-radius: 7px; color: white; background: #12161d; font-weight: 760; } .ds-primary-button:hover { color: #12161d; background: #c7f36b; }"
+    },
+    {
+      "name": "Learning Circuit",
+      "kind": "custom",
+      "description": "五枚引脚同时表达未开始、当前与完成状态。",
+      "html": "<ol class=\"ds-circuit\"><li class=\"is-active\"><span>1</span>看解法</li><li><span>2</span>复述</li><li><span>3</span>编码</li><li><span>4</span>验证</li><li><span>5</span>复盘</li></ol>",
+      "css": ".ds-circuit { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); padding:0; list-style:none; } .ds-circuit li { display:grid; justify-items:center; gap:8px; } .ds-circuit span { display:grid; width:36px; height:36px; place-items:center; border:1px solid #858f9b; border-radius:50%; background:#f8fafb; } .ds-circuit .is-active span { border-color:#12161d; background:#c7f36b; box-shadow:0 0 0 5px rgba(199,243,107,.3); }"
+    },
+    {
+      "name": "Code Editor",
+      "kind": "input",
+      "description": "独立编码阶段的深石墨 Python 工作台。",
+      "html": "<section class=\"ds-editor\"><strong>def solve(...)</strong><textarea spellcheck=\"false\"># TODO: 独立完成\npass</textarea></section>",
+      "css": ".ds-editor { color:#ecf1f7; background:#171c24; } .ds-editor strong { display:block; padding:16px 20px; background:#232b36; } .ds-editor textarea { width:100%; min-height:220px; padding:24px; border:0; border-radius:0; color:#ecf1f7; caret-color:#c7f36b; background:#171c24; font: .92rem/1.7 ui-monospace, monospace; } .ds-editor textarea:focus { outline:0; box-shadow:inset 0 0 0 2px #c7f36b; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "学习电路板 / Learning Circuit Board",
+    "overview": "冷陶瓷底板、石墨模块、钴蓝走线和黄绿色当前信号，把理解、撤掉支架、复现、验证与复盘连成一个可见回路。自托管展示字体只强化关键命题，正文保持系统字体的熟悉度。",
+    "keyCharacteristics": [
+      "五阶段轨道在手机与桌面都完整可见。",
+      "深色编码面与明亮讲解面分工明确。",
+      "层级依靠连续边界和连接关系，不依赖卡片阴影。",
+      "手机导航和路线题目拥有至少 44px 触控区域。"
+    ],
+    "rules": [
+      {
+        "name": "The Current Rule",
+        "body": "黄绿色只标记当前动作、选择与焦点。",
+        "section": "colors"
+      },
+      {
+        "name": "The Instrument Label Rule",
+        "body": "等宽大写只用于编号、状态、阶段和测量值。",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "普通表面使用边框和色调分层，阴影只属于活动状态和 Toast。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "用文字和形态共同表达状态。",
+      "让下一步保持最高视觉层级。",
+      "在窄屏完整呈现五个阶段。",
+      "保持明显的键盘焦点和 44px 触控热区。"
+    ],
+    "donts": [
+      "不要把整站做成深色霓虹终端。",
+      "不要只靠颜色表达完成或错误。",
+      "不要给普通模块添加悬浮阴影。",
+      "不要在移动端压缩成双栏迷你 IDE。"
+    ]
+  }
+}
