@@ -814,17 +814,14 @@ main {
   margin: 22px 0;
 }
 
-.edit-drawer label,
-.recall-form label {
+.edit-drawer label {
   display: grid;
   gap: 7px;
   font-weight: 700;
 }
 
 .edit-drawer input,
-.edit-drawer textarea,
-.recall-form input,
-.recall-form textarea {
+.edit-drawer textarea {
   width: 100%;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -832,8 +829,7 @@ main {
   background: var(--white);
 }
 
-.edit-drawer input,
-.recall-form input {
+.edit-drawer input {
   min-height: 46px;
   padding: 10px 12px;
 }
@@ -1129,22 +1125,17 @@ main {
 
 .recall-layout {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 1px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--line-strong);
+  gap: 18px;
 }
 
-.recall-brief,
-.recall-form {
+.recall-brief {
   padding: clamp(28px, 4vw, 54px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   background: var(--paper);
 }
 
 .recall-brief h2,
-.recall-form h2,
 .compare-heading h2,
 .schedule-layout h2 {
   font-family: "Smiley Sans", var(--body);
@@ -1183,7 +1174,14 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 24px;
+}
+
+.recall-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
 }
 
 .hint-output {
@@ -1197,23 +1195,6 @@ main {
 
 .hint-output p {
   margin: 5px 0 0;
-}
-
-.recall-form {
-  display: grid;
-  align-content: start;
-  gap: 20px;
-}
-
-.recall-form textarea {
-  min-height: 180px;
-  padding: 13px;
-  caret-color: var(--cobalt);
-  resize: vertical;
-}
-
-.preview-drawer {
-  grid-column: 1 / -1;
 }
 
 .write-layout {
@@ -1367,40 +1348,6 @@ main {
 .attempt-signal span {
   margin-top: 3px;
   font-size: 0.8rem;
-}
-
-.your-recall {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 24px;
-  padding: 22px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.your-recall h3 {
-  margin-bottom: 0;
-}
-
-.your-recall dl {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 0;
-}
-
-.your-recall dl div {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 12px;
-}
-
-.your-recall dt {
-  color: var(--muted);
-}
-
-.your-recall dd {
-  margin: 0;
-  white-space: pre-wrap;
 }
 
 .solution-drawer {
@@ -1883,7 +1830,6 @@ main {
   .split-heading,
   .library-header,
   .compare-heading,
-  .your-recall,
   .settings-layout,
   .history-layout,
   .write-layout,
@@ -1936,15 +1882,6 @@ main {
     min-height: 180px;
     border-top: 1px solid #3d4756;
     border-left: 0;
-  }
-
-  .your-recall {
-    gap: 14px;
-  }
-
-  .your-recall dl div {
-    grid-template-columns: 1fr;
-    gap: 2px;
   }
 
   .schedule-readout {
@@ -2108,17 +2045,19 @@ main {
     font-size: 0.72rem;
   }
 
-  .recall-layout {
-    display: block;
-  }
-
-  .recall-brief,
-  .recall-form {
+  .recall-brief {
     padding: 28px 20px;
   }
 
-  .recall-form {
-    border-top: 1px solid var(--line-strong);
+  .recall-actions,
+  .memory-aids {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recall-actions .primary-button,
+  .memory-aids .quiet-button {
+    width: 100%;
   }
 
   #code-editor {

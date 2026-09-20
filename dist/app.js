@@ -175,9 +175,7 @@
       independentPasses: 0,
       attempts: 0,
       hintTotal: 0,
-      draft: "",
-      recallPattern: "",
-      recallPlan: ""
+      draft: ""
     };
   }
 
@@ -452,18 +450,17 @@
   }
 
   function renderPracticeStage(problem, progress, session) {
-    if (session.stage === 0) return renderRecallStage(problem, progress, session);
+    if (session.stage === 0) return renderRecallStage(problem);
     if (session.stage === 1) return renderWriteStage(problem, progress, session);
     if (session.stage === 2) return renderCompareStage(problem, progress, session);
     return renderScheduleStage(problem, progress, session);
   }
 
-  function renderRecallStage(problem, progress, session) {
+  function renderRecallStage(problem) {
     const hint = ui.revealedHint > 0 ? (problem.hints || [])[ui.revealedHint - 1] || "" : "";
     const preview = ui.previewOpen ? renderSolutions(problem, true) : "";
     return `<div class="recall-layout">
-      <section class="recall-brief"><span class="instrument-label">RECOGNITION SIGNAL</span><h2>先从记忆里找模式</h2><p>${escapeHTML(problem.summary)}</p><dl class="brief-facts"><div><dt>函数</dt><dd><code>${escapeHTML(problem.signature || "")}</code></dd></div><div><dt>解法</dt><dd>${(problem.solutions || []).length} 种可对照</dd></div><div><dt>测试</dt><dd>${(problem.tests || []).length} 组本地用例</dd></div></dl>${safeUrl(problem.officialUrl) ? `<a class="official-link" href="${escapeHTML(safeUrl(problem.officialUrl))}" target="_blank" rel="noreferrer">查看官方原题</a>` : ""}<div class="memory-aids"><button class="quiet-button" type="button" data-action="show-hint">${ui.revealedHint ? "再看一条提示" : "给我一个提示"}</button><button class="quiet-button" type="button" data-action="preview-solution">${ui.previewOpen ? "收起参考解法" : "完全忘记，先看参考"}</button></div>${hint ? `<div class="hint-output"><strong>提示 ${ui.revealedHint}</strong><p>${escapeHTML(hint)}</p></div>` : ""}</section>
-      <form class="recall-form" id="recall-form"><span class="instrument-label">ACTIVE RECALL</span><h2>写下代码之前的两件事</h2><label><span>识别信号</span><input id="recall-pattern" name="pattern" maxlength="240" placeholder="看到什么条件时想到这个模式？" value="${escapeHTML(progress.recallPattern || "")}" /></label><label><span>解题骨架</span><textarea id="recall-plan" name="plan" maxlength="1200" placeholder="用 3～5 句话写出关键状态、循环不变量或递归定义。">${escapeHTML(progress.recallPlan || "")}</textarea></label><button class="primary-button" type="submit">去默写代码</button></form>
+      <section class="recall-brief"><span class="instrument-label">RECOGNITION SIGNAL</span><h2>先在脑中走一遍</h2><p>${escapeHTML(problem.summary)}</p><dl class="brief-facts"><div><dt>函数</dt><dd><code>${escapeHTML(problem.signature || "")}</code></dd></div><div><dt>解法</dt><dd>${(problem.solutions || []).length} 种可对照</dd></div><div><dt>测试</dt><dd>${(problem.tests || []).length} 组本地用例</dd></div></dl>${safeUrl(problem.officialUrl) ? `<a class="official-link" href="${escapeHTML(safeUrl(problem.officialUrl))}" target="_blank" rel="noreferrer">查看官方原题</a>` : ""}<div class="recall-actions"><button class="primary-button" type="button" data-action="start-writing">开始默写</button><div class="memory-aids"><button class="quiet-button" type="button" data-action="show-hint">${ui.revealedHint ? "再看一条提示" : "给我一个提示"}</button><button class="quiet-button" type="button" data-action="preview-solution">${ui.previewOpen ? "收起参考解法" : "完全忘记，先看参考"}</button></div></div>${hint ? `<div class="hint-output"><strong>提示 ${ui.revealedHint}</strong><p>${escapeHTML(hint)}</p></div>` : ""}</section>
       ${preview ? `<aside class="solution-drawer preview-drawer"><header><span class="instrument-label">MEMORY REFRESH</span><h2>看完后合上，再从空白写</h2></header>${preview}</aside>` : ""}
     </div>`;
   }
@@ -483,9 +480,8 @@
   function renderCompareStage(problem, progress, session) {
     return `<div class="compare-layout">
       <header class="compare-heading"><div><span class="instrument-label">COMPARE AFTER RECALL</span><h2>对照的不是答案文本，是决策过程</h2><p>先比较识别信号、状态定义和边界，再查看完整代码。</p></div><div class="attempt-signal ${session.testsPassed ? "is-pass" : ""}"><strong>${session.testsPassed ? "本地测试通过" : session.testResults ? "仍有用例未通过" : "尚未运行测试"}</strong><span>${session.revealedBeforeAttempt ? "写前看过参考" : "闭卷尝试"} · 使用 ${session.hintsUsed} 次提示</span></div></header>
-      <section class="your-recall"><h3>你的回忆</h3><dl><div><dt>识别信号</dt><dd>${escapeHTML(progress.recallPattern || "未填写")}</dd></div><div><dt>解题骨架</dt><dd>${escapeHTML(progress.recallPlan || "未填写")}</dd></div></dl><button class="secondary-button" type="button" data-action="back-to-code">返回修改代码</button></section>
       <section class="solution-drawer"><header><span class="instrument-label">SOLUTION VARIANTS</span><h2>${(problem.solutions || []).length} 种 Python 写法</h2></header>${renderSolutions(problem, false)}</section>
-      <div class="compare-next"><p>确认自己能解释“为什么这样写”后，再安排下一次回忆。</p><button class="primary-button" type="button" data-action="go-schedule">安排复习</button></div>
+      <div class="compare-next"><p>确认自己能解释“为什么这样写”后，再安排下一次回忆。</p><button class="secondary-button" type="button" data-action="back-to-code">返回修改代码</button><button class="primary-button" type="button" data-action="go-schedule">安排复习</button></div>
     </div>`;
   }
 
@@ -508,12 +504,6 @@
   }
 
   function bindPracticeInputs(problem, progress) {
-    document.getElementById("recall-form")?.addEventListener("input", (event) => {
-      const data = new FormData(event.currentTarget);
-      progress.recallPattern = String(data.get("pattern") || "");
-      progress.recallPlan = String(data.get("plan") || "");
-      scheduleSave();
-    });
     const editor = document.getElementById("code-editor");
     editor?.addEventListener("input", () => {
       progress.draft = editor.value;
@@ -871,6 +861,7 @@
       scheduleSave();
       renderPractice();
     }
+    else if (action === "start-writing") moveStage(1);
     else if (action === "reset-code") resetCode();
     else if (action === "back-stage") moveStage(state.session.stage - 1);
     else if (action === "run-tests") runTests(findProblem(state.session.problemId, state.session.libraryId));
@@ -922,16 +913,7 @@
   root.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.target;
-    if (form.id === "recall-form") {
-      const data = new FormData(form);
-      const plan = String(data.get("plan") || "").trim();
-      if (plan.length < 12) return showToast("先写下至少一句完整的解题骨架。", 2800);
-      const progress = ensureProblemState(state.session.problemId, state.session.libraryId);
-      progress.recallPattern = String(data.get("pattern") || "").trim();
-      progress.recallPlan = plan;
-      scheduleSave();
-      moveStage(1);
-    } else if (form.id === "schedule-form") {
+    if (form.id === "schedule-form") {
       const data = new FormData(form);
       state.session.errors = data.getAll("error").map(String);
       finishSession();
