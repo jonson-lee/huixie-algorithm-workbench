@@ -4,20 +4,22 @@
 
 “回写”正在调整为面向已有编程经验用户的免费算法记忆与复习工具。核心闭环不是刷完成数，而是：回忆识别信号和步骤，从空白写出 Python 解法，按需展开多种参考解法进行对照，最后安排复习。
 
-当前已部署的 `0.1.0` 仍是面向零基础用户的五阶段验证版。第一次更新目标为 `0.2.0`，已确认需求见 `docs/UPDATE_1_REQUIREMENTS.md`。
+本地开发版已经完成第一次更新的主要实现；Cloud Studio 公开地址仍运行 `0.1.0`，发布 `0.2.0` 前需要重新上传并完成线上验收。确认范围见 `docs/UPDATE_1_REQUIREMENTS.md`。
 
 ## 当前实现
 
 - 单页静态网站，入口在 `dist/index.html`。
-- `dist/problems.js` 保存原创摘要、题解、参考实现、提示、变式和测试。
-- `dist/app.js` 负责训练流程、个性化队列、间隔复习、本地存储及 WebMCP。
+- `dist/problems.js` 保存原创摘要、主解法、提示和测试。
+- `dist/solution-variants.js` 为 13 道内置题补充第二种独立 Python 解法，并规范化一题多解数据。
+- `dist/storage.js` 封装 IndexedDB；不可用时降级到 `localStorage` 兼容模式。
+- `dist/app.js` 负责四阶段回写、个性化队列、题库管理、导入校验、间隔复习及 WebMCP。
 - `dist/pyodide-worker.js` 在模块化 Web Worker 中运行 Python。
 - `dist/pyodide/` 自托管 Pyodide 314.0.6 核心文件及 MPL-2.0 许可证。
 - `dist/service-worker.js` 缓存站点外壳，并在后续请求中缓存同源运行时文件。
 - `.openai/hosting.json` 绑定 Sites 私有托管项目。
 - `docs/UPDATE_1_REQUIREMENTS.md` 是第一次产品更新的确认范围和验收标准。
 
-学习进度、草稿和设置保存在浏览器 `localStorage`，支持 JSON 导入、导出和清除。不要求账号，不上传代码，不接入 LeetCode 账号或 Cookie。
+题库、学习进度、草稿和设置保存在浏览器 IndexedDB，支持完整备份、恢复和主动清除。第一次启动会迁移旧版 `localStorage` 记录并在 IndexedDB 保留迁移备份。不要求账号，不上传代码，不接入 LeetCode 账号或 Cookie。
 
 ## 本地验证
 
@@ -26,13 +28,15 @@
 ```bash
 node --check dist/app.js
 node --check dist/problems.js
+node --check dist/solution-variants.js
+node --check dist/storage.js
 node --check dist/pyodide-worker.js
 node --check dist/service-worker.js
 node scripts/verify-content.mjs
 python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 ```
 
-浏览器验收必须覆盖：新题学习、闭卷复述、编码、本地测试、官方结果标记、复盘、断点续学、390px 手机布局和宽屏布局。
+浏览器验收必须覆盖：题库切换、答案按需展开、闭卷回忆、代码默写、本地测试、对照、复习安排、断点续学、390px 手机布局和宽屏布局。
 
 ## Cloud Studio 部署
 

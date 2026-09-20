@@ -3,8 +3,10 @@ import vm from "node:vm";
 import { spawnSync } from "node:child_process";
 
 const source = fs.readFileSync(new URL("../dist/problems.js", import.meta.url), "utf8");
+const variantsSource = fs.readFileSync(new URL("../dist/solution-variants.js", import.meta.url), "utf8");
 const sandbox = { window: {} };
 vm.runInNewContext(source, sandbox);
+vm.runInNewContext(variantsSource, sandbox);
 const problems = sandbox.window.PROBLEMS;
 
 function normalize(value, mode) {
@@ -35,28 +37,30 @@ for (const problem of problems) {
     console.error(`FAIL ${problem.id} / starter syntax: ${starterCheck.stderr.trim()}`);
   }
 
-  for (const test of problem.tests) {
-    const runner = `${problem.solution}\n\nimport json, sys\nargs = json.loads(sys.stdin.read())\nprint(json.dumps(solve(*args), ensure_ascii=False))`;
-    const result = spawnSync("python3", ["-c", runner], {
-      input: JSON.stringify(test.args),
-      encoding: "utf8"
-    });
+  for (const solution of problem.solutions) {
+    for (const test of problem.tests) {
+      const runner = `${solution.code}\n\nimport json, sys\nargs = json.loads(sys.stdin.read())\nprint(json.dumps(solve(*args), ensure_ascii=False))`;
+      const result = spawnSync("python3", ["-c", runner], {
+        input: JSON.stringify(test.args),
+        encoding: "utf8"
+      });
 
-    if (result.status !== 0) {
-      failures += 1;
-      console.error(`FAIL ${problem.id} / ${test.label}: ${result.stderr.trim()}`);
-      continue;
-    }
+      if (result.status !== 0) {
+        failures += 1;
+        console.error(`FAIL ${problem.id} / ${solution.name} / ${test.label}: ${result.stderr.trim()}`);
+        continue;
+      }
 
-    const actual = JSON.parse(result.stdout.trim());
-    const pass = JSON.stringify(normalize(actual, problem.compare))
-      === JSON.stringify(normalize(test.expected, problem.compare));
+      const actual = JSON.parse(result.stdout.trim());
+      const pass = JSON.stringify(normalize(actual, problem.compare))
+        === JSON.stringify(normalize(test.expected, problem.compare));
 
-    if (!pass) {
-      failures += 1;
-      console.error(
-        `FAIL ${problem.id} / ${test.label}: expected ${JSON.stringify(test.expected)}, got ${JSON.stringify(actual)}`
-      );
+      if (!pass) {
+        failures += 1;
+        console.error(
+          `FAIL ${problem.id} / ${solution.name} / ${test.label}: expected ${JSON.stringify(test.expected)}, got ${JSON.stringify(actual)}`
+        );
+      }
     }
   }
 }
@@ -66,5 +70,6 @@ if (failures) {
   process.exit(1);
 }
 
-const testCount = problems.reduce((sum, problem) => sum + problem.tests.length, 0);
-console.log(`${problems.length} starters compiled and ${testCount} reference tests passed`);
+const testCount = problems.reduce((sum, problem) => sum + problem.tests.length * problem.solutions.length, 0);
+const solutionCount = problems.reduce((sum, problem) => sum + problem.solutions.length, 0);
+console.log(`${problems.length} starters compiled; ${solutionCount} solutions passed ${testCount} reference checks`);

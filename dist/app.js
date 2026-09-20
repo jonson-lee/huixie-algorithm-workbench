@@ -1,70 +1,45 @@
 (function () {
   "use strict";
 
-  const STORAGE_KEY = "huixie-learning-state-v1";
-  const VERSION = 1;
-  const PROBLEMS = Array.isArray(window.PROBLEMS) ? window.PROBLEMS : [];
-  const TOPIC_ORDER = ["哈希", "双指针", "滑动窗口", "栈", "链表", "二叉树", "图搜索", "二分查找", "堆与桶", "回溯", "动态规划"];
-  const ERROR_OPTIONS = ["没识别出题型", "思路想不到", "数据结构选错", "边界条件遗漏", "复杂度不清楚", "代码实现错误", "Python 语法不熟"];
-  const STATUS_LABELS = {
-    new: "未学习",
-    learning: "巩固中",
-    recall: "待复现",
-    mastered: "稳定掌握",
-    lapsed: "需要重学"
+  const APP_VERSION = 2;
+  const BUILTIN_LIBRARY_ID = "builtin-hot100";
+  const STATE_KEY = "state-v2";
+  const LIBRARIES_KEY = "libraries-v1";
+  const LEGACY_KEY = "huixie-learning-state-v1";
+  const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+  const ERROR_OPTIONS = ["题型识别错误", "关键不变量遗忘", "边界条件遗漏", "复杂度判断错误", "代码实现错误", "Python API 遗忘"];
+  const STATUS_LABELS = { new: "未开始", learning: "记忆中", recall: "待复习", mastered: "已掌握", lapsed: "需重写" };
+  const builtinLibrary = {
+    id: BUILTIN_LIBRARY_ID,
+    name: "Hot 100",
+    description: "内置精选题库 · 当前 13 题",
+    readOnly: true,
+    problems: Array.isArray(window.PROBLEMS) ? window.PROBLEMS : []
   };
-
   const defaultState = {
-    version: VERSION,
-    onboarded: false,
-    settings: {
-      language: "Python 3",
-      minutes: 25,
-      syntaxReady: true
-    },
-    problems: {},
+    version: APP_VERSION,
+    activeLibraryId: BUILTIN_LIBRARY_ID,
+    settings: { minutes: 25 },
+    progress: {},
     history: [],
-    session: null
+    session: null,
+    migratedAt: null
   };
 
-  let state = loadState();
-  let currentView = state.session ? "practice" : "today";
+  let state = clone(defaultState);
+  let customLibraries = [];
+  let currentView = "today";
   let runner = null;
   let runnerTimeout = null;
   let clearArmedUntil = 0;
-
+  let saveTimer = null;
+  let storageMode = "IndexedDB";
+  const ui = { editor: null, expandedSolutions: new Set(), revealedHint: 0, previewOpen: false, libraryError: "" };
   const root = document.getElementById("view-root");
   const toastRegion = document.getElementById("toast-region");
 
-  function cloneDefaultState() {
-    return JSON.parse(JSON.stringify(defaultState));
-  }
-
-  function loadState() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return cloneDefaultState();
-      const parsed = JSON.parse(raw);
-      if (parsed.version !== VERSION) return cloneDefaultState();
-      return {
-        ...cloneDefaultState(),
-        ...parsed,
-        settings: { ...defaultState.settings, ...(parsed.settings || {}) },
-        problems: parsed.problems || {},
-        history: Array.isArray(parsed.history) ? parsed.history : []
-      };
-    } catch (error) {
-      console.warn("无法读取本地进度", error);
-      return cloneDefaultState();
-    }
-  }
-
-  function saveState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (error) {
-      showToast("浏览器未能保存进度，请在设置中导出备份。", 4200);
-    }
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
   }
 
   function escapeHTML(value) {
@@ -76,37 +51,140 @@
       .replaceAll("'", "&#039;");
   }
 
-  function problemState(problemId) {
-    return state.problems[problemId] || {
-      status: "new",
-      independentPasses: 0,
-      hintTotal: 0,
-      attempts: 0,
-      errors: [],
-      draft: "",
-      recallIdea: "",
-      recallInvariant: ""
+  function safeUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" ? url.href : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function storageFallback() {
+    storageMode = "localStorage 兼容模式";
+    return {
+      async get(key) {
+        const raw = localStorage.getItem(`huixie-${key}`);
+        return raw ? JSON.parse(raw) : undefined;
+      },
+      async set(key, value) {
+        localStorage.setItem(`huixie-${key}`, JSON.stringify(value));
+      },
+      async clear() {
+        localStorage.removeItem(`huixie-${STATE_KEY}`);
+        localStorage.removeItem(`huixie-${LIBRARIES_KEY}`);
+      }
     };
   }
 
-  function ensureProblemState(problemId) {
-    if (!state.problems[problemId]) {
-      state.problems[problemId] = {
-        status: "new",
-        independentPasses: 0,
-        hintTotal: 0,
-        attempts: 0,
-        errors: [],
-        draft: "",
-        recallIdea: "",
-        recallInvariant: ""
-      };
+  let storage = window.HuixieStorage || storageFallback();
+
+  async function loadWorkspace() {
+    try {
+      const savedState = await storage.get(STATE_KEY);
+      const savedLibraries = await storage.get(LIBRARIES_KEY);
+      if (savedState?.version === APP_VERSION) state = normalizeState(savedState);
+      if (Array.isArray(savedLibraries)) customLibraries = savedLibraries.map(normalizeLibrary).filter(Boolean);
+      if (!savedState) await migrateLegacyState();
+    } catch (error) {
+      console.warn("IndexedDB 不可用，切换到兼容存储", error);
+      storage = storageFallback();
+      const savedState = await storage.get(STATE_KEY);
+      const savedLibraries = await storage.get(LIBRARIES_KEY);
+      if (savedState?.version === APP_VERSION) state = normalizeState(savedState);
+      if (Array.isArray(savedLibraries)) customLibraries = savedLibraries.map(normalizeLibrary).filter(Boolean);
+      if (!savedState) await migrateLegacyState();
     }
-    return state.problems[problemId];
+    if (!getLibrary(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
+    if (state.session && !findProblem(state.session.problemId, state.session.libraryId)) state.session = null;
   }
 
-  function findProblem(problemId) {
-    return PROBLEMS.find((problem) => problem.id === problemId) || PROBLEMS[0];
+  function normalizeState(input) {
+    return {
+      ...clone(defaultState),
+      ...input,
+      version: APP_VERSION,
+      settings: { ...defaultState.settings, ...(input.settings || {}) },
+      progress: input.progress && typeof input.progress === "object" ? input.progress : {},
+      history: Array.isArray(input.history) ? input.history.slice(0, 500) : []
+    };
+  }
+
+  async function migrateLegacyState() {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return;
+    try {
+      const legacy = JSON.parse(raw);
+      if (legacy?.version !== 1 || typeof legacy.problems !== "object") return;
+      const migratedProgress = {};
+      Object.entries(legacy.problems).forEach(([problemId, progress]) => {
+        migratedProgress[progressKey(BUILTIN_LIBRARY_ID, problemId)] = progress;
+      });
+      state = normalizeState({
+        ...defaultState,
+        settings: { minutes: Number(legacy.settings?.minutes) || 25 },
+        progress: migratedProgress,
+        history: (legacy.history || []).map((item) => ({ ...item, libraryId: BUILTIN_LIBRARY_ID })),
+        migratedAt: new Date().toISOString()
+      });
+      await storage.set("migration-backup-v1", legacy);
+      await persistNow();
+      localStorage.removeItem(LEGACY_KEY);
+    } catch (error) {
+      console.warn("旧版学习记录迁移失败，已保留原始数据", error);
+    }
+  }
+
+  function scheduleSave() {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => persistNow().catch(handleSaveError), 120);
+  }
+
+  async function persistNow() {
+    await Promise.all([storage.set(STATE_KEY, state), storage.set(LIBRARIES_KEY, customLibraries)]);
+  }
+
+  function handleSaveError(error) {
+    console.warn("保存失败", error);
+    showToast("本机保存失败，请立即导出备份。", 4200);
+  }
+
+  function allLibraries() {
+    return [builtinLibrary, ...customLibraries];
+  }
+
+  function getLibrary(libraryId = state.activeLibraryId) {
+    return allLibraries().find((library) => library.id === libraryId) || builtinLibrary;
+  }
+
+  function activeProblems() {
+    return getLibrary().problems || [];
+  }
+
+  function findProblem(problemId, libraryId = state.activeLibraryId) {
+    return (getLibrary(libraryId).problems || []).find((problem) => problem.id === problemId) || null;
+  }
+
+  function progressKey(libraryId, problemId) {
+    return `${libraryId}::${problemId}`;
+  }
+
+  function problemState(problemId, libraryId = state.activeLibraryId) {
+    return state.progress[progressKey(libraryId, problemId)] || {
+      status: "new",
+      independentPasses: 0,
+      attempts: 0,
+      hintTotal: 0,
+      draft: "",
+      recallPattern: "",
+      recallPlan: ""
+    };
+  }
+
+  function ensureProblemState(problemId, libraryId = state.activeLibraryId) {
+    const key = progressKey(libraryId, problemId);
+    if (!state.progress[key]) state.progress[key] = problemState(problemId, libraryId);
+    return state.progress[key];
   }
 
   function dayStart(date = new Date()) {
@@ -122,94 +200,54 @@
   }
 
   function isoDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    return date.toISOString().slice(0, 10);
   }
 
-  function formatDate(date) {
-    return new Intl.DateTimeFormat("zh-CN", {
-      month: "long",
-      day: "numeric",
-      weekday: "short"
-    }).format(date);
-  }
-
-  function formatReviewDate(value) {
-    if (!value) return "尚未安排";
+  function formatDate(value) {
+    if (!value) return "未安排";
     const target = dayStart(new Date(value));
-    const today = dayStart();
-    const delta = Math.round((target - today) / 86400000);
+    const delta = Math.round((target - dayStart()) / 86400000);
     if (delta <= 0) return "今天";
     if (delta === 1) return "明天";
-    return `${delta} 天后`;
-  }
-
-  function getQueue() {
-    const now = Date.now();
-    const activeSessionProblem = state.session ? findProblem(state.session.problemId) : null;
-    const due = PROBLEMS.filter((problem) => {
-      const progress = problemState(problem.id);
-      return progress.nextReviewAt && new Date(progress.nextReviewAt).getTime() <= now;
-    });
-
-    const unfinished = PROBLEMS.filter((problem) => {
-      const progress = problemState(problem.id);
-      return progress.firstSeenAt && !progress.nextReviewAt && progress.status !== "mastered";
-    });
-
-    const nextNew = PROBLEMS.find((problem) => !problemState(problem.id).firstSeenAt);
-    const selected = [];
-
-    [activeSessionProblem, ...due, ...unfinished].filter(Boolean).forEach((problem) => {
-      if (!selected.some((item) => item.id === problem.id)) selected.push(problem);
-    });
-
-    const reviewBudget = state.settings.minutes <= 15 ? 1 : state.settings.minutes <= 25 ? 2 : 3;
-    const limited = selected.slice(0, reviewBudget);
-    if (nextNew && (limited.length === 0 || state.settings.minutes >= 25)) limited.push(nextNew);
-
-    if (!limited.length && PROBLEMS.length) {
-      const weakest = [...PROBLEMS].sort((a, b) => masteryScore(problemState(a.id)) - masteryScore(problemState(b.id)))[0];
-      if (weakest) limited.push(weakest);
-    }
-
-    return limited;
+    if (delta < 7) return `${delta} 天后`;
+    return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(target);
   }
 
   function masteryScore(progress) {
     if (!progress.firstSeenAt) return 0;
-    if (progress.status === "mastered") return 5;
+    if (progress.status === "mastered") return 4;
     if (progress.status === "lapsed") return 1;
-    if (progress.independentPasses >= 2) return 4;
-    if (progress.independentPasses === 1) return 3;
+    if (progress.independentPasses >= 1) return 3;
     if (progress.attempts > 0) return 2;
     return 1;
   }
 
-  function selectedReason(problem) {
-    const progress = problemState(problem.id);
-    if (state.session?.problemId === problem.id) {
-      return `你上次停在第 ${state.session.stage + 1} 步。继续原训练，不会丢失已写内容。`;
-    }
-    if (!progress.firstSeenAt) {
-      return `${problem.topic}是后续路线的重要前置。今天只学习一题，先把这条线路接通。`;
-    }
-    if (progress.nextReviewAt && new Date(progress.nextReviewAt).getTime() <= Date.now()) {
-      return `这题的记忆间隔已到。先闭卷复现，再决定是否延长下一次间隔。`;
-    }
-    if (progress.status === "lapsed") {
-      return `上一次需要较多支架，系统已把它提前并允许重新学习。`;
-    }
-    return `这是当前最薄弱的已学题，优先补强比继续增加新题更有效。`;
+  function getQueue() {
+    const problems = activeProblems();
+    const now = Date.now();
+    const due = problems.filter((problem) => {
+      const progress = problemState(problem.id);
+      return progress.nextReviewAt && new Date(progress.nextReviewAt).getTime() <= now;
+    }).sort((a, b) => new Date(problemState(a.id).nextReviewAt) - new Date(problemState(b.id).nextReviewAt));
+    const weak = problems.filter((problem) => {
+      const progress = problemState(problem.id);
+      return progress.firstSeenAt && !due.includes(problem) && progress.status !== "mastered";
+    }).sort((a, b) => masteryScore(problemState(a.id)) - masteryScore(problemState(b.id)));
+    const unseen = problems.filter((problem) => !problemState(problem.id).firstSeenAt);
+    const sessionProblem = state.session?.libraryId === state.activeLibraryId ? findProblem(state.session.problemId, state.session.libraryId) : null;
+    const limit = state.settings.minutes <= 15 ? 1 : state.settings.minutes <= 25 ? 2 : 3;
+    const queue = [];
+    [sessionProblem, ...due, ...weak, ...unseen].filter(Boolean).forEach((problem) => {
+      if (!queue.some((item) => item.id === problem.id)) queue.push(problem);
+    });
+    return queue.slice(0, limit);
   }
 
   function setView(view) {
+    saveSessionInputs();
     currentView = view;
-    if (view !== "practice" && state.session) {
-      saveSessionInputs();
-    }
+    ui.editor = null;
+    ui.libraryError = "";
     updateNavigation();
     render();
     document.getElementById("main-content")?.focus({ preventScroll: true });
@@ -219,254 +257,129 @@
   function updateNavigation() {
     document.querySelectorAll("[data-view]").forEach((button) => {
       if (!button.closest(".main-nav")) return;
-      if (button.dataset.view === currentView) {
-        button.setAttribute("aria-current", "page");
-      } else {
-        button.removeAttribute("aria-current");
-      }
+      if (button.dataset.view === currentView) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
     });
   }
 
   function render() {
-    if (!PROBLEMS.length) {
-      root.innerHTML = `<section class="empty-state"><div><p class="panel-label">CONTENT ERROR</p><h2>训练内容没有载入</h2><p>请刷新页面；如果问题仍存在，请稍后再试。</p></div></section>`;
-      return;
-    }
-
-    if (currentView === "practice" && state.session) {
-      renderPractice();
-      return;
-    }
-
-    const renderers = {
-      today: renderToday,
-      route: renderRoute,
-      progress: renderProgress,
-      settings: renderSettings
-    };
-    (renderers[currentView] || renderToday)();
+    if (currentView === "practice" && state.session) return renderPractice();
+    const views = { today: renderToday, libraries: renderLibraries, progress: renderProgress, settings: renderSettings };
+    (views[currentView] || renderToday)();
   }
 
   function renderToday() {
+    const library = getLibrary();
+    const problems = activeProblems();
     const queue = getQueue();
     const active = queue[0];
-    const reviewCount = queue.filter((problem) => problemState(problem.id).firstSeenAt).length;
-    const newCount = queue.filter((problem) => !problemState(problem.id).firstSeenAt).length;
-    const estimate = queue.reduce((total, problem) => total + (problemState(problem.id).firstSeenAt ? 12 : problem.minutes), 0);
-    const learned = PROBLEMS.filter((problem) => problemState(problem.id).firstSeenAt).length;
-    const mastered = PROBLEMS.filter((problem) => problemState(problem.id).status === "mastered").length;
-    const meter = Math.min(100, Math.round((estimate / Math.max(15, state.settings.minutes)) * 100));
+    const dueCount = problems.filter((problem) => {
+      const progress = problemState(problem.id);
+      return progress.nextReviewAt && new Date(progress.nextReviewAt).getTime() <= Date.now();
+    }).length;
+    const learned = problems.filter((problem) => problemState(problem.id).firstSeenAt).length;
+    const mastered = problems.filter((problem) => problemState(problem.id).status === "mastered").length;
 
-    if (!active) {
-      root.innerHTML = `<section class="empty-state"><div><p class="panel-label">CIRCUIT CLEAR</p><h2>今天的线路已经全部接通</h2><p>没有到期复习，也没有新题。明天回来继续巩固。</p></div></section>`;
+    if (!problems.length) {
+      root.innerHTML = `<section class="empty-state"><p class="instrument-label">EMPTY LIBRARY</p><h1>这个题库还是空的</h1><p>创建一道题，或导入包含题解与测试的回写 JSON。</p><button class="primary-button" type="button" data-view="libraries">管理题库</button></section>`;
       return;
     }
-
-    const activeProgress = problemState(active.id);
-    const isActiveSession = state.session?.problemId === active.id;
-    const isDue = Boolean(activeProgress.nextReviewAt && new Date(activeProgress.nextReviewAt).getTime() <= Date.now());
-    const activeMode = isActiveSession ? "resume" : isDue ? "review" : activeProgress.firstSeenAt ? "continue" : "new";
-    const stageLabels = (isActiveSession ? state.session.kind === "review" : activeProgress.firstSeenAt)
-      ? ["回忆", "提纲", "编码", "验证", "复盘"]
-      : ["看解法", "复述", "编码", "验证", "复习"];
-    const pins = PROBLEMS.slice(0, 12)
-      .map((problem) => `<span data-state="${escapeHTML(problemState(problem.id).status)}" title="${escapeHTML(problem.title)}：${escapeHTML(STATUS_LABELS[problemState(problem.id).status] || "未学习")}"></span>`)
-      .join("");
-
-    const setup = !state.onboarded
-      ? `<section class="setup-strip" aria-label="首次设置">
-          <div>
-            <p class="panel-label">首次启动</p>
-            <strong>已按默认方案准备：Python 3 · 每天 ${state.settings.minutes} 分钟 · 算法零基础</strong>
-          </div>
-          <div class="choice-row">
-            <button class="secondary-button" type="button" data-view="settings">调整</button>
-            <button class="primary-button" type="button" data-action="accept-defaults">就按这个开始</button>
-          </div>
-        </section>`
-      : "";
-
+    const activeProgress = active ? problemState(active.id) : null;
     root.innerHTML = `
-      <section class="workspace" aria-label="今日学习工作台">
-        <aside class="load-rail">
-          <div>
-            <p class="rail-title">今日负载</p>
-            <p class="load-time">${estimate}<small>分钟预计用时</small></p>
-            <div class="load-meter" style="--meter: ${meter}%" role="img" aria-label="预计使用今日 ${meter}% 的学习时间"><span></span></div>
-          </div>
-          <ul class="load-list">
-            <li><span>待续 / 复习</span><strong>${reviewCount}</strong></li>
-            <li><span>今日新题</span><strong>${newCount}</strong></li>
-            <li><span>已学总数</span><strong>${learned}</strong></li>
-          </ul>
-          <p class="rail-note">到期复习优先于新题。积压时，系统会自动减少新内容，不会因为断签惩罚你。</p>
+      <section class="desk-layout" aria-label="今日复习工作台">
+        <aside class="desk-rail">
+          <p class="instrument-label">ACTIVE LIBRARY</p>
+          <button class="library-switch" type="button" data-view="libraries"><strong>${escapeHTML(library.name)}</strong><span>${problems.length} 题 · ${library.readOnly ? "内置" : "自定义"}</span></button>
+          <dl class="load-readout"><div><dt>已到期</dt><dd>${dueCount}</dd></div><div><dt>已记忆</dt><dd>${learned}</dd></div><div><dt>已掌握</dt><dd>${mastered}</dd></div></dl>
+          <p class="rail-note">队列优先安排到期题，再补当前薄弱题。没有签到惩罚。</p>
         </aside>
-
-        <section class="circuit-board">
-          ${setup}
-          <header class="board-heading">
-            <div>
-              <h1>${activeMode === "resume" ? "继续接通这条线路" : activeMode === "review" ? "把这道题写回来" : activeMode === "continue" ? "完成上次没写完的题" : "今天，接通第一条线路"}</h1>
-              <p>系统已经决定下一步，你只需要完成眼前这一项。</p>
-            </div>
-            <div class="date-chip">${escapeHTML(formatDate(new Date()))}<br />LOCAL / ${escapeHTML(state.settings.language)}</div>
-          </header>
-
-          <ol class="learning-circuit" aria-label="本题训练阶段">
-            ${stageLabels.map((label, index) => `<li class="${index === 0 ? "is-active" : ""}"><span class="pin">${index + 1}</span><span>${label}</span></li>`).join("")}
-          </ol>
-
-          <article class="active-module">
-            <div class="module-main">
-              <div class="module-topline">
-                <span class="module-id">LC ${active.number}</span>
-                <span class="signal-tag">${activeMode === "resume" ? "继续训练" : activeMode === "review" ? "到期复现" : activeMode === "continue" ? "待完成" : "今日新题"}</span>
-              </div>
-              <h2>${escapeHTML(active.title)}</h2>
-              <p>${escapeHTML(active.summary)}</p>
-              <button class="primary-button" type="button" data-action="start-problem" data-problem-id="${escapeHTML(active.id)}">
-                ${activeMode === "resume" ? "继续原训练" : activeMode === "review" ? "开始闭卷复现" : activeMode === "continue" ? "继续完成" : "开始今天的训练"}
-              </button>
-            </div>
-            <aside class="module-side">
-              <div>
-                <p class="panel-label">当前信号</p>
-                <strong>${escapeHTML(selectedReason(active))}</strong>
-              </div>
-              <dl>
-                <div><dt>主题</dt><dd>${escapeHTML(active.topic)}</dd></div>
-                <div><dt>阶段</dt><dd>${escapeHTML(STATUS_LABELS[activeProgress.status] || "未学习")}</dd></div>
-                <div><dt>预计</dt><dd>${activeProgress.firstSeenAt ? 12 : active.minutes} MIN</dd></div>
-              </dl>
-            </aside>
-          </article>
-
-          <div class="queue-strip" aria-label="今日训练队列">
-            ${queue.map((problem, index) => {
-              const progress = problemState(problem.id);
-              const isSession = state.session?.problemId === problem.id;
-              const isReview = Boolean(progress.nextReviewAt && new Date(progress.nextReviewAt).getTime() <= Date.now());
-              const isSeen = Boolean(progress.firstSeenAt);
-              const queueLabel = isSession ? "RESUME" : isReview ? "REVIEW" : isSeen ? "CONTINUE" : "NEW";
-              return `<button class="queue-row plain-row-button" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}">
-                <span class="queue-index">${String(index + 1).padStart(2, "0")}</span>
-                <strong>${escapeHTML(problem.title)}</strong>
-                <small>${escapeHTML(problem.topic)} · ${isSeen ? "约 12 分钟" : `约 ${problem.minutes} 分钟`}</small>
-                <span class="queue-state ${isSeen ? "is-due" : ""}">${queueLabel}</span>
-              </button>`;
-            }).join("")}
-          </div>
-        </section>
-
-        <aside class="evidence-rail">
-          <p class="rail-title">稳定掌握</p>
-          <p class="mastery-copy">${mastered ? `已有 ${mastered} 道题经得住间隔复现。` : "目前还没有题目通过稳定性验证。"}</p>
-          <div class="mastery-pins" aria-label="前十二题掌握状态">${pins}</div>
-          <div class="reason-block">
-            <h2>为什么是这道题</h2>
-            <p>${escapeHTML(selectedReason(active))}</p>
-            <button class="plain-link" type="button" data-view="route">查看完整路线</button>
-          </div>
-          <div class="reason-block">
-            <h2>掌握不等于看过</h2>
-            <p>需要跨日期闭卷完成，并能解释原理和处理一个变化条件，才会点亮稳定掌握。</p>
-          </div>
-        </aside>
+        <div class="desk-main">
+          <header class="today-heading"><div><h1>把答案写回来</h1><p>${escapeHTML(new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date()))} · Python 3</p></div><span class="local-badge">本机复习队列</span></header>
+          ${active ? `<article class="next-recall">
+            <div class="problem-signal"><span>LC ${escapeHTML(active.number || "—")}</span><span>${escapeHTML(active.topic || "未分类")}</span><span>${activeProgress?.nextReviewAt ? "到期回写" : activeProgress?.firstSeenAt ? "继续巩固" : "首次记忆"}</span></div>
+            <h2>${escapeHTML(active.title)}</h2><p class="problem-summary">${escapeHTML(active.summary)}</p>
+            <div class="signature-line"><code>${escapeHTML(active.signature || "def solve(...)")}</code><span>${(active.solutions || []).length} 种解法</span></div>
+            <button class="primary-button current-action" type="button" data-action="start-problem" data-problem-id="${escapeHTML(active.id)}">${state.session ? "继续当前回写" : activeProgress?.firstSeenAt ? "开始闭卷回写" : "记住这道题"}</button>
+          </article>` : `<section class="empty-state compact"><h2>当前没有待复习题</h2><p>可以从题库任选一题开始。</p></section>`}
+          <section class="queue-section"><header><h2>接下来</h2><span>${queue.length} 项 · 约 ${Math.max(8, queue.length * 10)} 分钟</span></header><div class="queue-list">
+            ${queue.map((problem, index) => { const progress = problemState(problem.id); return `<button class="queue-item" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}"><span class="queue-order">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHTML(problem.title)}</strong><small>${escapeHTML(problem.topic || "未分类")} · ${escapeHTML(STATUS_LABELS[progress.status] || "未开始")}</small></span><span class="queue-due">${progress.nextReviewAt ? escapeHTML(formatDate(progress.nextReviewAt)) : "NEW"}</span></button>`; }).join("")}
+          </div></section>
+        </div>
+        <aside class="memory-rail"><p class="instrument-label">MEMORY SIGNAL</p><h2>${mastered ? `${mastered} 道稳定记忆` : "还没有稳定记忆"}</h2><div class="memory-pins" aria-label="题目记忆状态">${problems.slice(0, 20).map((problem) => `<span data-state="${escapeHTML(problemState(problem.id).status)}" title="${escapeHTML(problem.title)}"></span>`).join("")}</div><div class="rail-callout"><strong>答案不会常驻页面</strong><p>需要时展开；写完后再对照。记忆的是识别信号与代码骨架。</p></div><button class="secondary-button" type="button" data-view="libraries">浏览全部题目</button></aside>
       </section>`;
   }
 
-  function renderRoute() {
-    const queue = getQueue();
-    const next = queue[0] || PROBLEMS[0];
-    const groups = TOPIC_ORDER.map((topic) => ({
-      topic,
-      problems: PROBLEMS.filter((problem) => problem.topic === topic)
-    })).filter((group) => group.problems.length);
-
+  function renderLibraries() {
+    const library = getLibrary();
+    const problems = library.problems || [];
     root.innerHTML = `
-      <section class="page-view">
-        <header class="page-heading">
-          <h1>路线不是题单，是前置关系</h1>
-          <p>所有题目都可以自由打开；推荐顺序会优先补齐下一题所依赖的知识，而不是照着列表机械向下刷。</p>
+      <section class="page-view library-page">
+        <header class="page-heading split-heading">
+          <div><h1>题库</h1><p>内置题库保持只读；自定义题库可以携带多种 Python 解法和本地测试。</p></div>
+          <div class="heading-actions"><button class="quiet-button" type="button" data-action="download-library-template">下载格式示例</button><button class="secondary-button" type="button" data-action="import-library">导入题库</button><button class="primary-button" type="button" data-action="new-library">新建题库</button><input id="library-import-file" type="file" accept="application/json" hidden /></div>
         </header>
-        <div class="route-layout">
-          <ol class="concept-track">
-            ${groups.map((group, index) => {
-              const scores = group.problems.map((problem) => masteryScore(problemState(problem.id)));
-              const average = scores.reduce((a, b) => a + b, 0) / scores.length;
-              const isCurrent = group.problems.some((problem) => problem.id === next.id);
-              const status = average >= 4 ? "稳定" : average > 0 ? "学习中" : isCurrent ? "当前推荐" : "未学习";
-              return `<li class="concept-row ${isCurrent ? "is-current" : ""}">
-                <span class="concept-pin">${String(index + 1).padStart(2, "0")}</span>
-                <h2>${escapeHTML(group.topic)}</h2>
-                <div class="concept-problems">
-                  ${group.problems.map((problem) => `<button class="problem-chip" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}">${escapeHTML(problem.title)}</button>`).join("")}
-                </div>
-                <span class="track-status">${status}</span>
-              </li>`;
-            }).join("")}
-          </ol>
-          <aside class="route-aside">
-            <p class="panel-label">推荐下一步</p>
-            <h2>${escapeHTML(next.title)}</h2>
-            <p>${escapeHTML(selectedReason(next))}</p>
-            <button class="primary-button" type="button" data-action="start-problem" data-problem-id="${escapeHTML(next.id)}">进入训练</button>
+        ${ui.libraryError ? `<div class="inline-error" role="alert"><strong>导入未完成</strong><span>${escapeHTML(ui.libraryError)}</span></div>` : ""}
+        <div class="library-layout">
+          <aside class="library-list" aria-label="题库列表">
+            ${allLibraries().map((item) => `<button type="button" data-action="select-library" data-library-id="${escapeHTML(item.id)}" class="library-list-item ${item.id === library.id ? "is-active" : ""}"><span><strong>${escapeHTML(item.name)}</strong><small>${item.readOnly ? "内置题库" : "自定义题库"}</small></span><b>${item.problems.length}</b></button>`).join("")}
           </aside>
+          <section class="library-workbench">
+            <header class="library-header">
+              <div><span class="instrument-label">${library.readOnly ? "BUILT-IN / READ ONLY" : "CUSTOM / LOCAL"}</span><h2>${escapeHTML(library.name)}</h2><p>${escapeHTML(library.description || "没有描述")}</p></div>
+              <div class="library-actions">${library.readOnly ? "" : `<button class="quiet-button" type="button" data-action="edit-library">编辑信息</button><button class="quiet-button" type="button" data-action="export-library">导出</button><button class="danger-text" type="button" data-action="delete-library">删除</button><button class="primary-button" type="button" data-action="new-problem">添加题目</button>`}</div>
+            </header>
+            ${ui.editor ? renderEditor(library) : ""}
+            <div class="problem-index">
+              ${problems.length ? problems.map((problem) => {
+                const progress = problemState(problem.id, library.id);
+                return `<article class="problem-row"><button class="problem-open" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}" data-library-id="${escapeHTML(library.id)}"><span class="problem-number">${escapeHTML(problem.number || "—")}</span><span><strong>${escapeHTML(problem.title)}</strong><small>${escapeHTML(problem.topic || "未分类")} · ${(problem.solutions || []).length} 解 · ${(problem.tests || []).length} 测试</small></span><span class="status-text">${escapeHTML(STATUS_LABELS[progress.status] || "未开始")}</span></button>${library.readOnly ? "" : `<button class="row-action" type="button" data-action="edit-problem" data-problem-id="${escapeHTML(problem.id)}">编辑 JSON</button><button class="row-action danger-text" type="button" data-action="delete-problem" data-problem-id="${escapeHTML(problem.id)}">删除</button>`}</article>`;
+              }).join("") : `<div class="empty-state compact"><h3>还没有题目</h3><p>添加第一道题，或导入完整题库。</p></div>`}
+            </div>
+          </section>
         </div>
       </section>`;
   }
 
+  function renderEditor(library) {
+    if (ui.editor.type === "library") {
+      const editing = ui.editor.mode === "edit";
+      return `<form class="edit-drawer" id="library-form"><header><div><span class="instrument-label">${editing ? "EDIT LIBRARY" : "NEW LIBRARY"}</span><h3>${editing ? "编辑题库信息" : "创建空白题库"}</h3></div><button class="quiet-button" type="button" data-action="close-editor">关闭</button></header><div class="field-grid"><label><span>名称</span><input name="name" required maxlength="60" value="${escapeHTML(editing ? library.name : "")}" /></label><label><span>描述</span><input name="description" maxlength="180" value="${escapeHTML(editing ? library.description : "")}" /></label></div><button class="primary-button" type="submit">${editing ? "保存题库" : "创建题库"}</button></form>`;
+    }
+    const editingProblem = ui.editor.problemId ? findProblem(ui.editor.problemId) : null;
+    const sample = editingProblem || {
+      id: `problem-${Date.now().toString(36)}`,
+      number: "",
+      title: "",
+      topic: "未分类",
+      summary: "",
+      signature: "solve(...) → ...",
+      starter: "def solve(...):\n    pass",
+      solutions: [{ id: "solution-1", name: "解法一", idea: "", steps: [], complexity: "", pitfalls: [], code: "def solve(...):\n    pass" }],
+      tests: [{ label: "基础用例", args: [], expected: null }],
+      compare: "exact"
+    };
+    const clean = clone(sample);
+    delete clean.libraryId;
+    return `<form class="edit-drawer json-editor" id="problem-form"><header><div><span class="instrument-label">PROBLEM JSON</span><h3>${editingProblem ? `编辑「${escapeHTML(editingProblem.title)}」` : "添加题目"}</h3></div><button class="quiet-button" type="button" data-action="close-editor">关闭</button></header><p>一题可包含多个 <code>solutions</code>；测试入口固定为 <code>solve</code>。保存前会验证结构，不执行其中任何 HTML。</p><label><span>题目 JSON</span><textarea id="problem-json" name="problemJson" spellcheck="false">${escapeHTML(JSON.stringify(clean, null, 2))}</textarea></label><div class="editor-submit"><span>格式版本 1 · Python 3</span><button class="primary-button" type="submit">验证并保存</button></div></form>`;
+  }
+
   function renderProgress() {
-    const learned = PROBLEMS.filter((problem) => problemState(problem.id).firstSeenAt).length;
-    const reproduced = PROBLEMS.filter((problem) => problemState(problem.id).independentPasses > 0).length;
-    const mastered = PROBLEMS.filter((problem) => problemState(problem.id).status === "mastered").length;
-    const grouped = TOPIC_ORDER.map((topic) => {
-      const topicProblems = PROBLEMS.filter((problem) => problem.topic === topic);
-      if (!topicProblems.length) return null;
-      const average = Math.round(topicProblems.reduce((sum, problem) => sum + masteryScore(problemState(problem.id)), 0) / topicProblems.length);
-      const nextReview = topicProblems
-        .map((problem) => problemState(problem.id).nextReviewAt)
-        .filter(Boolean)
-        .sort()[0];
-      return { topic, count: topicProblems.length, score: average, nextReview };
-    }).filter(Boolean);
-
-    const errors = {};
-    Object.values(state.problems).forEach((progress) => {
-      (progress.errors || []).forEach((error) => {
-        errors[error] = (errors[error] || 0) + 1;
-      });
-    });
-    const errorEntries = Object.entries(errors).sort((a, b) => b[1] - a[1]);
-
+    const library = getLibrary();
+    const problems = activeProblems();
+    const learned = problems.filter((problem) => problemState(problem.id).firstSeenAt).length;
+    const recalled = problems.filter((problem) => problemState(problem.id).independentPasses > 0).length;
+    const mastered = problems.filter((problem) => problemState(problem.id).status === "mastered").length;
+    const history = state.history.filter((item) => item.libraryId === library.id).slice(0, 12);
     root.innerHTML = `
       <section class="page-view">
-        <header class="page-heading">
-          <h1>看懂只是通电，复现才算闭环</h1>
-          <p>这里同时保留“学过”和“能写回”的差距，避免完成数量制造虚假的进度感。</p>
-        </header>
-        <div class="progress-layout">
-          <div>
-            <p class="progress-sentence">你已学习 <strong>${learned}</strong> 道，其中 <strong>${reproduced}</strong> 道曾闭卷通过，<strong>${mastered}</strong> 道达到稳定掌握。</p>
-            <table class="signal-table">
-              <thead><tr><th>知识模块</th><th>题目</th><th>信号强度</th><th>下次复习</th></tr></thead>
-              <tbody>
-                ${grouped.map((group) => `<tr>
-                  <td>${escapeHTML(group.topic)}</td>
-                  <td>${group.count}</td>
-                  <td><span class="strength-bar" aria-label="${group.score} 级，共 5 级">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= group.score ? "is-on" : ""}"></i>`).join("")}</span></td>
-                  <td>${escapeHTML(formatReviewDate(group.nextReview))}</td>
-                </tr>`).join("")}
-              </tbody>
-            </table>
-          </div>
-          <aside class="error-panel">
-            <p class="panel-label">卡点诊断</p>
-            <h2>${errorEntries.length ? "这些错误正在重复出现" : "完成一次复盘后，这里会显示具体卡点"}</h2>
-            ${errorEntries.length
-              ? `<ul class="error-list">${errorEntries.slice(0, 6).map(([label, count]) => `<li><span>${escapeHTML(label)}</span><strong>${count} 次</strong></li>`).join("")}</ul>`
-              : `<p class="field-help">系统记录的是“为什么没写出来”，不是简单的对错。下一次路线会优先处理重复错误。</p>`}
-          </aside>
+        <header class="page-heading"><h1>复习记录</h1><p>${escapeHTML(library.name)} · 只统计真正写过的题，不把浏览答案算作掌握。</p></header>
+        <div class="progress-band" aria-label="复习概览"><div><strong>${learned}</strong><span>开始记忆</span></div><div><strong>${recalled}</strong><span>独立写出</span></div><div><strong>${mastered}</strong><span>稳定掌握</span></div></div>
+        <div class="history-layout">
+          <section><h2>最近回写</h2><div class="history-list">${history.length ? history.map((item) => {
+            const problem = findProblem(item.problemId, item.libraryId);
+            return `<div class="history-row"><span class="history-grade" data-grade="${item.rating}">${item.rating}</span><span><strong>${escapeHTML(problem?.title || "已删除题目")}</strong><small>${escapeHTML(new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(item.completedAt)))}</small></span><span>${item.testsPassed ? "测试通过" : "未通过测试"}<small>下次 ${escapeHTML(formatDate(item.nextReviewAt))}</small></span></div>`;
+          }).join("") : `<div class="empty-state compact"><p>完成一次回写后，这里会出现记录。</p></div>`}</div></section>
+          <aside class="review-rule"><span class="instrument-label">SPACED RECALL</span><h2>评分直接决定间隔</h2><dl><div><dt>1 忘记</dt><dd>今天稍后</dd></div><div><dt>2 模糊</dt><dd>明天</dd></div><div><dt>3 记得</dt><dd>约 3–7 天</dd></div><div><dt>4 熟练</dt><dd>约 7–90 天</dd></div></dl></aside>
         </div>
       </section>`;
   }
@@ -474,557 +387,447 @@
   function renderSettings() {
     root.innerHTML = `
       <section class="page-view">
-        <header class="page-heading">
-          <h1>让训练适合你的真实时间</h1>
-          <p>首版不需要账号。学习记录、草稿和设置只保存在当前浏览器中，你可以随时导出或清除。</p>
-        </header>
-        <div class="settings-grid">
-          <form class="settings-form" id="settings-form">
-            <div class="field-group">
-              <span class="field-label">每日时间</span>
-              <div class="radio-row">
-                ${[15, 25, 45].map((minutes) => `<label class="radio-option"><input type="radio" name="minutes" value="${minutes}" ${state.settings.minutes === minutes ? "checked" : ""} />${minutes} 分钟</label>`).join("")}
-              </div>
-              <p class="field-help">时间越少，系统越会优先保留到期复习并减少新题。</p>
-            </div>
-
-            <div class="field-group">
-              <span class="field-label">编程基础</span>
-              <div class="radio-row">
-                <label class="radio-option"><input type="radio" name="syntaxReady" value="true" ${state.settings.syntaxReady ? "checked" : ""} />会变量、循环和函数</label>
-                <label class="radio-option"><input type="radio" name="syntaxReady" value="false" ${!state.settings.syntaxReady ? "checked" : ""} />还需要语法热身</label>
-              </div>
-              <p class="field-help">当前 MVP 只支持 Python 3。语法热身模块将在下一版补齐。</p>
-            </div>
-
-            <div class="field-group">
-              <span class="field-label">本地运行环境</span>
-              <p class="field-help">首次运行会按需加载 Python 运行时。测试只用于学习反馈，最终结果以官方平台提交为准。</p>
-            </div>
-
-            <div><button class="primary-button" type="submit">保存设置</button></div>
-          </form>
-
-          <aside class="data-panel">
-            <p class="panel-label">本机数据</p>
-            <h2>你的代码默认不上传</h2>
-            <p>清理浏览器数据会丢失进度。建议每隔一段时间导出一份 JSON 备份。</p>
-            <div class="data-actions">
-              <button class="secondary-button" type="button" data-action="export-data">导出学习数据</button>
-              <button class="secondary-button" type="button" data-action="import-data">导入学习数据</button>
-              <input id="import-file" type="file" accept="application/json" hidden />
-              <button class="danger-button" type="button" data-action="clear-data">清除全部数据</button>
-            </div>
-          </aside>
+        <header class="page-heading"><h1>设置与数据</h1><p>所有题库、代码和复习记录默认只保存在当前浏览器。</p></header>
+        <div class="settings-layout">
+          <form class="settings-form" id="settings-form"><span class="instrument-label">DAILY LOAD</span><h2>每日复习预算</h2><div class="radio-row">${[15, 25, 45].map((minutes) => `<label><input type="radio" name="minutes" value="${minutes}" ${state.settings.minutes === minutes ? "checked" : ""} /><span>${minutes} 分钟</span></label>`).join("")}</div><p>预算只影响每日队列长度，不会删除到期题或制造连续签到压力。</p><button class="primary-button" type="submit">保存设置</button></form>
+          <aside class="data-panel"><span class="instrument-label">LOCAL DATA / ${escapeHTML(storageMode)}</span><h2>备份整个工作台</h2><p>备份包含自定义题库、代码草稿与复习记录。导入会替换当前本机数据。</p><div class="data-actions"><button class="secondary-button" type="button" data-action="export-backup">导出备份</button><button class="secondary-button" type="button" data-action="import-backup">导入备份</button><input id="backup-import-file" type="file" accept="application/json" hidden /><button class="danger-button" type="button" data-action="clear-data">清除本机数据</button></div>${state.migratedAt ? `<p class="migration-note">旧版 localStorage 进度已于 ${escapeHTML(new Intl.DateTimeFormat("zh-CN").format(new Date(state.migratedAt)))} 迁移。</p>` : ""}</aside>
         </div>
       </section>`;
   }
 
-  function startProblem(problemId, forceLearn = false) {
-    const problem = findProblem(problemId);
-    const progress = ensureProblemState(problem.id);
-    const isNew = !progress.firstSeenAt;
-
-    if (state.session && !forceLearn) {
-      if (state.session.problemId !== problem.id) {
-        const active = findProblem(state.session.problemId);
-        showToast(`先完成「${active.title}」，已带你回到原训练。`, 3200);
-      }
-      setView("practice");
+  function startProblem(problemId, libraryId = state.activeLibraryId) {
+    if (libraryId !== state.activeLibraryId) state.activeLibraryId = libraryId;
+    const problem = findProblem(problemId, libraryId);
+    if (!problem) return showToast("没有找到这道题。", 2600);
+    if (state.session && (state.session.problemId !== problemId || state.session.libraryId !== libraryId)) {
+      showToast("已保留当前草稿；先完成或退出当前回写。", 3000);
+      currentView = "practice";
+      render();
       return;
     }
-
-    if (isNew) {
+    const progress = ensureProblemState(problemId, libraryId);
+    if (!progress.firstSeenAt) {
       progress.firstSeenAt = new Date().toISOString();
       progress.status = "learning";
-      progress.draft = progress.draft || problem.starter;
+      progress.draft = progress.draft || problem.starter || "def solve(...):\n    pass";
     }
-
-    state.session = {
-      problemId: problem.id,
-      kind: isNew || forceLearn || progress.status === "lapsed" ? "learn" : "review",
-      stage: isNew || forceLearn || progress.status === "lapsed" ? 0 : 1,
+    const isNewSession = !state.session;
+    state.session = state.session || {
+      libraryId,
+      problemId,
+      stage: 0,
       startedAt: new Date().toISOString(),
       hintsUsed: 0,
-      testResults: null,
+      revealedBeforeAttempt: false,
       testsPassed: false,
-      officialAccepted: null,
-      confidence: null,
-      errors: [],
-      variantAnswer: ""
+      testResults: null,
+      rating: null,
+      errors: []
     };
-    progress.attempts = (progress.attempts || 0) + 1;
-    saveState();
-    setView("practice");
+    ui.previewOpen = false;
+    ui.revealedHint = 0;
+    if (isNewSession) progress.attempts = (progress.attempts || 0) + 1;
+    scheduleSave();
+    currentView = "practice";
+    updateNavigation();
+    render();
   }
 
   function renderPractice() {
-    if (!state.session) {
-      setView("today");
-      return;
+    const session = state.session;
+    const problem = session ? findProblem(session.problemId, session.libraryId) : null;
+    if (!session || !problem) {
+      state.session = null;
+      return setView("today");
     }
-    const problem = findProblem(state.session.problemId);
-    const labels = ["学习解法", "闭卷复述", "独立编码", "运行验证", "复盘安排"];
-    const stage = state.session.stage;
-
+    const progress = ensureProblemState(problem.id, session.libraryId);
+    const stages = ["回忆", "默写", "对照", "复习"];
     root.innerHTML = `
       <section class="practice-view">
-        <header class="practice-head">
-          <button class="back-button" type="button" data-action="leave-practice" aria-label="返回今日训练">返回</button>
-          <div class="practice-title">
-            <h1>${escapeHTML(problem.title)}</h1>
-            <p>LC ${problem.number} · ${escapeHTML(problem.topic)} · ${escapeHTML(problem.signature)}</p>
-          </div>
-          <div class="practice-progress">STAGE ${stage + 1} / 5</div>
-        </header>
-        <ol class="practice-circuit" aria-label="训练进度">
-          ${labels.map((label, index) => `<li class="${index < stage ? "is-complete" : ""} ${index === stage ? "is-active" : ""}"><span class="pin"></span><span>${label}</span></li>`).join("")}
-        </ol>
-        <div class="stage-shell">${renderStage(problem, stage)}</div>
+        <header class="practice-header"><button class="back-button" type="button" data-action="leave-practice">返回</button><div><h1>${escapeHTML(problem.title)}</h1><p>LC ${escapeHTML(problem.number || "—")} · ${escapeHTML(problem.topic || "未分类")} · ${escapeHTML(problem.signature || "")}</p></div><span>PYTHON 3</span></header>
+        <ol class="recall-track" aria-label="回写进度">${stages.map((label, index) => `<li class="${index < session.stage ? "is-complete" : ""} ${index === session.stage ? "is-current" : ""}"><span>${index + 1}</span><b>${label}</b></li>`).join("")}</ol>
+        <div class="practice-surface">${renderPracticeStage(problem, progress, session)}</div>
       </section>`;
-
-    bindStageInputs(problem, stage);
+    bindPracticeInputs(problem, progress);
   }
 
-  function renderStage(problem, stage) {
-    if (stage === 0) return renderLearnStage(problem);
-    if (stage === 1) return renderRecallStage(problem);
-    if (stage === 2) return renderCodeStage(problem);
-    if (stage === 3) return renderVerifyStage(problem);
-    return renderReviewStage(problem);
+  function renderPracticeStage(problem, progress, session) {
+    if (session.stage === 0) return renderRecallStage(problem, progress, session);
+    if (session.stage === 1) return renderWriteStage(problem, progress, session);
+    if (session.stage === 2) return renderCompareStage(problem, progress, session);
+    return renderScheduleStage(problem, progress, session);
   }
 
-  function renderLearnStage(problem) {
-    return `<div class="learn-stage">
-      <section class="problem-brief">
-        <p class="panel-label">原创学习摘要</p>
-        <h2>先弄清楚问题，再记住模式</h2>
-        <p>${escapeHTML(problem.summary)}</p>
-        <ul class="brief-list">
-          ${problem.prerequisites.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}
-        </ul>
-        <a class="official-link" href="${escapeHTML(problem.officialUrl)}" target="_blank" rel="noreferrer">在力扣查看官方原题</a>
-      </section>
-      <section class="solution-panel" id="solution-panel">
-        <div>
-          <p class="panel-label">核心洞察</p>
-          <h2>${escapeHTML(problem.why)}</h2>
-        </div>
-        <div class="insight-box"><p class="panel-label">需要记住的一句话</p><p>${escapeHTML(problem.insight)}</p></div>
-        <div class="trace-table" aria-label="解法推演">
-          ${problem.trace.map(([label, value]) => `<div class="trace-cell"><strong>${escapeHTML(label)}</strong>${escapeHTML(value)}</div>`).join("")}
-        </div>
-        <div>
-          <p class="panel-label">四步完成</p>
-          <ol class="step-list">${problem.steps.map((step) => `<li>${escapeHTML(step)}</li>`).join("")}</ol>
-          <p><strong>复杂度：</strong>${escapeHTML(problem.complexity)}</p>
-        </div>
-        ${codeBlock(problem.solution, "参考实现 · Python 3")}
-        <div class="stage-actions">
-          <p>下一步会完全收起答案，先写思路，再写代码。</p>
-          <button class="primary-button" type="button" data-action="disconnect-solution">合上解法，开始复现</button>
-        </div>
-      </section>
+  function renderRecallStage(problem, progress, session) {
+    const hint = ui.revealedHint > 0 ? (problem.hints || [])[ui.revealedHint - 1] || "" : "";
+    const preview = ui.previewOpen ? renderSolutions(problem, true) : "";
+    return `<div class="recall-layout">
+      <section class="recall-brief"><span class="instrument-label">RECOGNITION SIGNAL</span><h2>先从记忆里找模式</h2><p>${escapeHTML(problem.summary)}</p><dl class="brief-facts"><div><dt>函数</dt><dd><code>${escapeHTML(problem.signature || "")}</code></dd></div><div><dt>解法</dt><dd>${(problem.solutions || []).length} 种可对照</dd></div><div><dt>测试</dt><dd>${(problem.tests || []).length} 组本地用例</dd></div></dl>${safeUrl(problem.officialUrl) ? `<a class="official-link" href="${escapeHTML(safeUrl(problem.officialUrl))}" target="_blank" rel="noreferrer">查看官方原题</a>` : ""}<div class="memory-aids"><button class="quiet-button" type="button" data-action="show-hint">${ui.revealedHint ? "再看一条提示" : "给我一个提示"}</button><button class="quiet-button" type="button" data-action="preview-solution">${ui.previewOpen ? "收起参考解法" : "完全忘记，先看参考"}</button></div>${hint ? `<div class="hint-output"><strong>提示 ${ui.revealedHint}</strong><p>${escapeHTML(hint)}</p></div>` : ""}</section>
+      <form class="recall-form" id="recall-form"><span class="instrument-label">ACTIVE RECALL</span><h2>写下代码之前的两件事</h2><label><span>识别信号</span><input id="recall-pattern" name="pattern" maxlength="240" placeholder="看到什么条件时想到这个模式？" value="${escapeHTML(progress.recallPattern || "")}" /></label><label><span>解题骨架</span><textarea id="recall-plan" name="plan" maxlength="1200" placeholder="用 3～5 句话写出关键状态、循环不变量或递归定义。">${escapeHTML(progress.recallPlan || "")}</textarea></label><button class="primary-button" type="submit">去默写代码</button></form>
+      ${preview ? `<aside class="solution-drawer preview-drawer"><header><span class="instrument-label">MEMORY REFRESH</span><h2>看完后合上，再从空白写</h2></header>${preview}</aside>` : ""}
     </div>`;
   }
 
-  function renderRecallStage(problem) {
-    const progress = problemState(problem.id);
-    return `<div class="recall-stage">
-      <aside class="recall-guide">
-        <p class="panel-label">支架已断开</p>
-        <h2>现在只靠你的记忆。</h2>
-        <p>不要求一次写得完美。先把算法的骨架说清楚，再进入编辑器。</p>
-        <div class="circuit-break" aria-hidden="true"><span></span></div>
-      </aside>
-      <section class="recall-panel">
-        <p class="panel-label">闭卷复述</p>
-        <h2>先写“为什么”，再写“怎么做”</h2>
-        <form class="recall-form" id="recall-form">
-          <div class="field-group">
-            <label for="pattern-select">你认为这题的核心模式是什么？</label>
-            <select id="pattern-select" name="pattern">
-              <option value="">先自己判断</option>
-              ${TOPIC_ORDER.map((topic) => `<option value="${escapeHTML(topic)}" ${progress.recallPattern === topic ? "selected" : ""}>${escapeHTML(topic)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field-group">
-            <label for="recall-idea">用自己的话写出 2～4 步解法</label>
-            <textarea id="recall-idea" name="idea" placeholder="例如：扫描当前元素；计算需要的另一个值；查询是否已经出现……">${escapeHTML(progress.recallIdea || "")}</textarea>
-          </div>
-          <div class="field-group">
-            <label for="recall-invariant">哪个条件在整个过程中始终成立？</label>
-            <textarea id="recall-invariant" name="invariant" placeholder="不确定也可以先写猜测，复盘时再修正。">${escapeHTML(progress.recallInvariant || "")}</textarea>
-          </div>
-          <div class="stage-actions">
-            <button class="secondary-button" type="button" data-action="relearn">重新看解法</button>
-            <button class="primary-button" type="submit">进入独立编辑器</button>
-          </div>
-        </form>
-      </section>
+  function renderWriteStage(problem, progress, session) {
+    return `<div class="write-layout">
+      <section class="code-workbench"><header><div><span class="instrument-label">REWRITE / PYTHON 3</span><h2>${escapeHTML(problem.signature || "solve(...)")}</h2></div><div><button class="quiet-button" type="button" data-action="reset-code">重置</button><button class="quiet-button" type="button" data-action="back-stage">返回回忆</button></div></header><textarea id="code-editor" aria-label="Python 代码编辑器" spellcheck="false">${escapeHTML(progress.draft || problem.starter || "")}</textarea><div class="code-actions"><span>⌘ / Ctrl + Enter 运行</span><div><button class="secondary-button" type="button" data-action="go-compare">先去对照</button><button class="primary-button" type="button" data-action="run-tests">运行 ${problem.tests?.length || 0} 组测试</button></div></div></section>
+      <aside class="test-console" id="test-console" aria-live="polite">${renderTestResults(session.testResults)}<p class="console-note">本地测试只用于学习反馈；最终结果以官方平台为准。</p></aside>
     </div>`;
   }
 
-  function renderCodeStage(problem) {
-    const progress = problemState(problem.id);
-    const session = state.session;
-    const highestHint = session.hintsUsed > 0 ? problem.hints[session.hintsUsed - 1] : "先独立写一遍。卡住 3 分钟后再逐级打开提示。";
-    const consoleMarkup = session.testResults
-      ? session.testResults.map((result) => `<p class="${result.pass ? "pass" : "fail"}">${result.pass ? "PASS" : "FAIL"} · ${escapeHTML(result.label)}${result.error ? ` · ${escapeHTML(result.error)}` : ""}</p>`).join("")
-      : `<p>尚未运行。本地环境只执行本站原创测试，最终结果以官方提交为准。</p>`;
+  function renderTestResults(results) {
+    if (!Array.isArray(results)) return `<p class="console-idle">READY · 代码只在浏览器 Worker 中运行。</p>`;
+    return results.map((result) => `<p class="${result.pass ? "pass" : "fail"}"><strong>${result.pass ? "PASS" : "FAIL"}</strong><span>${escapeHTML(result.label)}${result.error ? ` · ${escapeHTML(result.error)}` : ""}</span></p>`).join("");
+  }
 
-    return `<div class="coding-stage">
-      <aside class="code-sidebar">
-        <p class="panel-label">分级提示</p>
-        <h2>只揭开刚好够用的一层</h2>
-        <p>${escapeHTML(problem.summary)}</p>
-        <div class="hint-stack">
-          ${problem.hints.map((hint, index) => `<button class="hint-button" type="button" data-action="show-hint" data-hint-level="${index + 1}" ${session.hintsUsed >= index + 1 ? "disabled" : ""}>提示 ${index + 1} · ${index === 0 ? "方向" : index === 1 ? "关键量" : "代码骨架"}</button>`).join("")}
-        </div>
-        <div class="hint-output" id="hint-output">${escapeHTML(highestHint)}</div>
-        <button class="plain-link" type="button" data-action="relearn">我需要重新学习</button>
-      </aside>
-      <section class="editor-shell">
-        <div class="editor-toolbar"><strong>${escapeHTML(problem.signature)}</strong><span>⌘ / Ctrl + Enter 运行</span></div>
-        <textarea class="code-editor" id="code-editor" aria-label="Python 代码编辑器" spellcheck="false">${escapeHTML(progress.draft || problem.starter)}</textarea>
-        <div class="test-console" id="test-console" aria-live="polite">${consoleMarkup}</div>
-        <div class="editor-actions">
-          <button class="secondary-button" type="button" data-action="reset-code">恢复起始代码</button>
-          <div>
-            <button class="secondary-button" type="button" data-action="skip-to-verify">去官方提交</button>
-            <button class="primary-button" type="button" data-action="run-tests">运行本地测试</button>
-          </div>
-        </div>
-      </section>
+  function renderCompareStage(problem, progress, session) {
+    return `<div class="compare-layout">
+      <header class="compare-heading"><div><span class="instrument-label">COMPARE AFTER RECALL</span><h2>对照的不是答案文本，是决策过程</h2><p>先比较识别信号、状态定义和边界，再查看完整代码。</p></div><div class="attempt-signal ${session.testsPassed ? "is-pass" : ""}"><strong>${session.testsPassed ? "本地测试通过" : session.testResults ? "仍有用例未通过" : "尚未运行测试"}</strong><span>${session.revealedBeforeAttempt ? "写前看过参考" : "闭卷尝试"} · 使用 ${session.hintsUsed} 次提示</span></div></header>
+      <section class="your-recall"><h3>你的回忆</h3><dl><div><dt>识别信号</dt><dd>${escapeHTML(progress.recallPattern || "未填写")}</dd></div><div><dt>解题骨架</dt><dd>${escapeHTML(progress.recallPlan || "未填写")}</dd></div></dl><button class="secondary-button" type="button" data-action="back-to-code">返回修改代码</button></section>
+      <section class="solution-drawer"><header><span class="instrument-label">SOLUTION VARIANTS</span><h2>${(problem.solutions || []).length} 种 Python 写法</h2></header>${renderSolutions(problem, false)}</section>
+      <div class="compare-next"><p>确认自己能解释“为什么这样写”后，再安排下一次回忆。</p><button class="primary-button" type="button" data-action="go-schedule">安排复习</button></div>
     </div>`;
   }
 
-  function renderVerifyStage(problem) {
-    const session = state.session;
-    const results = session.testResults || [];
-    const allPassed = results.length > 0 && results.every((result) => result.pass);
-    return `<div class="verify-stage">
-      <section class="test-report">
-        <p class="panel-label">本地练习结果</p>
-        <h2>${allPassed ? "这次线路已经接通。" : results.length ? "还有一个断点需要处理。" : "先去官方环境完成最终验证。"}</h2>
-        <p>${allPassed ? "所有本站测试已通过，但这不等于官方 Accepted。" : "你可以返回编辑器修正，也可以打开官方原题继续验证。"}</p>
-        ${results.length
-          ? `<ul class="result-list">${results.map((result, index) => `<li><span class="result-mark">${result.pass ? "✓" : "×"}</span><span>${escapeHTML(result.label)}</span><span>${result.pass ? "通过" : escapeHTML(result.error || "结果不符")}</span></li>`).join("")}</ul>`
-          : `<div class="hint-output">本地测试未运行。官方页面拥有完整题面和最终判题环境。</div>`}
-        <div class="choice-row">
-          <button class="secondary-button" type="button" data-action="back-to-code">返回编辑器</button>
-          <button class="primary-button" type="button" data-action="to-review">进入复盘</button>
-        </div>
-      </section>
-      <aside class="official-check">
-        <p class="panel-label">最终验证</p>
-        <h2>以官方提交为准</h2>
-        <p>本站不读取你的账号或 Cookie，也不会代你提交代码。打开原题后，把函数签名适配为官方格式即可。</p>
-        <a class="secondary-button" href="${escapeHTML(problem.officialUrl)}" target="_blank" rel="noreferrer">打开力扣原题</a>
-        <button class="secondary-button" type="button" data-action="official-result" data-value="accepted">官方已通过</button>
-        <button class="secondary-button" type="button" data-action="official-result" data-value="failed">暂时未通过</button>
-      </aside>
-    </div>`;
-  }
-
-  function renderReviewStage(problem) {
-    const session = state.session;
-    const progress = problemState(problem.id);
-    const predicted = predictReview(session, progress);
-    const resultSummary = session.testsPassed
-      ? `本地测试通过${session.hintsUsed ? `，使用了 ${session.hintsUsed} 级提示` : "，未使用提示"}。`
-      : "本次尚未通过全部本地测试。";
-
-    return `<div class="review-stage">
-      <aside class="review-summary">
-        <p class="panel-label">本次证据</p>
-        <h2>${session.testsPassed && session.hintsUsed === 0 ? "你独立接通了这条线路。" : "先记录断点，系统会把它安排得更近。"}</h2>
-        <p>${escapeHTML(resultSummary)}</p>
-        <div class="next-review">
-          <span class="panel-label">预计下次出现</span>
-          <strong>${escapeHTML(predicted.label)}</strong>
-          <p>完成复盘后会根据你的真实表现重新计算。</p>
-        </div>
-      </aside>
-      <section class="review-panel">
-        <p class="panel-label">复盘与迁移</p>
-        <h2>最后一步：告诉系统哪里还不稳</h2>
-        <form class="review-form" id="review-form">
-          <div class="field-group">
-            <span class="field-label">这次最接近哪种感受？</span>
-            <div class="confidence-row">
-              ${[1, 2, 3, 4, 5].map((value) => `<button type="button" data-action="set-confidence" data-value="${value}" aria-pressed="${session.confidence === value}">${value}<span class="sr-only"> 级</span></button>`).join("")}
-            </div>
-            <p class="field-help">1 = 仍然完全依赖答案；5 = 能独立完成并解释。</p>
-          </div>
-          <div class="field-group">
-            <span class="field-label">本次卡点</span>
-            <div class="check-grid">
-              ${ERROR_OPTIONS.map((label) => `<label class="check-option"><input type="checkbox" name="error" value="${escapeHTML(label)}" ${session.errors.includes(label) ? "checked" : ""} />${escapeHTML(label)}</label>`).join("")}
-            </div>
-          </div>
-          <div class="field-group">
-            <label for="variant-answer">换个问法：${escapeHTML(problem.variant)}</label>
-            <textarea id="variant-answer" name="variant" placeholder="写下你的判断即可，不要求完整代码。">${escapeHTML(session.variantAnswer || "")}</textarea>
-          </div>
-          <details>
-            <summary>重新对照参考实现</summary>
-            ${codeBlock(problem.solution, "复盘参考 · Python 3")}
-          </details>
-          <div class="stage-actions">
-            <p>错题不会永久打叉；每次新的证据都会更新路线。</p>
-            <button class="primary-button" type="submit">完成并安排复习</button>
-          </div>
-        </form>
-      </section>
-    </div>`;
+  function renderSolutions(problem, previewMode) {
+    return (problem.solutions || []).map((solution, index) => {
+      const key = `${problem.id}:${solution.id || index}:${previewMode ? "preview" : "compare"}`;
+      const expanded = ui.expandedSolutions.has(key);
+      const sourceUrl = safeUrl(solution.source?.url);
+      return `<article class="solution-variant ${expanded ? "is-expanded" : ""}"><button class="solution-summary" type="button" data-action="toggle-solution" data-solution-key="${escapeHTML(key)}" aria-expanded="${expanded}"><span><b>${String(index + 1).padStart(2, "0")}</b><strong>${escapeHTML(solution.name || `解法 ${index + 1}`)}</strong><small>${escapeHTML(solution.complexity || "复杂度未填写")}</small></span><i>${expanded ? "收起" : "展开"}</i></button>${expanded ? `<div class="solution-detail"><p class="solution-idea">${escapeHTML(solution.idea || "暂无思路说明")}</p>${Array.isArray(solution.steps) && solution.steps.length ? `<ol>${solution.steps.map((step) => `<li>${escapeHTML(step)}</li>`).join("")}</ol>` : ""}${Array.isArray(solution.pitfalls) && solution.pitfalls.length ? `<div class="pitfalls"><strong>易错点</strong><ul>${solution.pitfalls.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul></div>` : ""}${codeBlock(solution.code || "", solution.name || "参考代码")}${sourceUrl ? `<a class="source-link" href="${escapeHTML(sourceUrl)}" target="_blank" rel="noreferrer">参考来源：${escapeHTML(solution.source.label || sourceUrl)}</a>` : `<span class="source-note">${escapeHTML(solution.source?.label || "站内独立实现")}</span>`}</div>` : ""}</article>`;
+    }).join("");
   }
 
   function codeBlock(code, label) {
-    return `<div class="code-block"><div class="code-head"><span>${escapeHTML(label)}</span><button class="copy-button" type="button" data-action="copy-code" data-code="${escapeHTML(code)}">复制</button></div><pre><code>${escapeHTML(code)}</code></pre></div>`;
+    return `<div class="code-block"><header><span>${escapeHTML(label)}</span><button class="copy-button" type="button" data-action="copy-code" data-code="${escapeHTML(code)}">复制</button></header><pre><code>${escapeHTML(code)}</code></pre></div>`;
   }
 
-  function bindStageInputs(problem, stage) {
-    if (stage === 1) {
-      const form = document.getElementById("recall-form");
-      form?.addEventListener("input", () => {
-        const progress = ensureProblemState(problem.id);
-        const data = new FormData(form);
-        progress.recallPattern = String(data.get("pattern") || "");
-        progress.recallIdea = String(data.get("idea") || "");
-        progress.recallInvariant = String(data.get("invariant") || "");
-        saveState();
-      });
-    }
+  function renderScheduleStage(problem, progress, session) {
+    const preview = session.rating ? predictReview(session.rating, progress.intervalDays || 0) : null;
+    return `<form class="schedule-layout" id="schedule-form"><section><span class="instrument-label">SELF RATING</span><h2>下一次什么时候再写？</h2><p>按刚才真实的回忆难度选择。测试通过不等于记得牢。</p><div class="rating-grid">${[[1, "忘记", "今天稍后"], [2, "模糊", "明天"], [3, "记得", "延长间隔"], [4, "熟练", "大幅延长"]].map(([value, title, note]) => `<button type="button" data-action="set-rating" data-value="${value}" aria-pressed="${session.rating === value}"><b>${value}</b><strong>${title}</strong><span>${note}</span></button>`).join("")}</div><fieldset><legend>这次卡在哪里？可多选</legend><div class="error-options">${ERROR_OPTIONS.map((label) => `<label><input type="checkbox" name="error" value="${escapeHTML(label)}" ${session.errors.includes(label) ? "checked" : ""} /><span>${escapeHTML(label)}</span></label>`).join("")}</div></fieldset></section><aside class="schedule-readout"><span class="instrument-label">NEXT REVIEW</span><strong>${preview ? escapeHTML(preview.label) : "选择评分"}</strong><p>${preview ? `间隔 ${preview.days || "<1"} 天 · ${session.testsPassed ? "测试通过" : "测试未通过"}` : "评分后会显示透明的复习间隔。"}</p><button class="primary-button" type="submit" ${session.rating ? "" : "disabled"}>完成并返回今日</button><button class="quiet-button" type="button" data-action="back-stage">返回对照</button></aside></form>`;
+  }
 
-    if (stage === 2) {
-      const editor = document.getElementById("code-editor");
-      editor?.addEventListener("input", () => {
-        ensureProblemState(problem.id).draft = editor.value;
-        saveState();
-      });
-      editor?.addEventListener("keydown", (event) => {
-        if (event.key === "Tab") {
-          event.preventDefault();
-          const start = editor.selectionStart;
-          const end = editor.selectionEnd;
-          editor.value = `${editor.value.slice(0, start)}    ${editor.value.slice(end)}`;
-          editor.selectionStart = editor.selectionEnd = start + 4;
-          editor.dispatchEvent(new Event("input"));
-        }
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-          event.preventDefault();
-          runTests(problem);
-        }
-      });
-    }
-
-    if (stage === 4) {
-      const form = document.getElementById("review-form");
-      form?.addEventListener("input", () => {
-        const data = new FormData(form);
-        state.session.errors = data.getAll("error").map(String);
-        state.session.variantAnswer = String(data.get("variant") || "");
-        saveState();
-      });
-    }
+  function bindPracticeInputs(problem, progress) {
+    document.getElementById("recall-form")?.addEventListener("input", (event) => {
+      const data = new FormData(event.currentTarget);
+      progress.recallPattern = String(data.get("pattern") || "");
+      progress.recallPlan = String(data.get("plan") || "");
+      scheduleSave();
+    });
+    const editor = document.getElementById("code-editor");
+    editor?.addEventListener("input", () => {
+      progress.draft = editor.value;
+      scheduleSave();
+    });
+    editor?.addEventListener("keydown", (event) => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        editor.value = `${editor.value.slice(0, start)}    ${editor.value.slice(end)}`;
+        editor.selectionStart = editor.selectionEnd = start + 4;
+        editor.dispatchEvent(new Event("input"));
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        runTests(problem);
+      }
+    });
   }
 
   function saveSessionInputs() {
     if (!state.session) return;
-    const problem = findProblem(state.session.problemId);
     const editor = document.getElementById("code-editor");
-    if (editor) ensureProblemState(problem.id).draft = editor.value;
-    saveState();
+    if (editor) ensureProblemState(state.session.problemId, state.session.libraryId).draft = editor.value;
+    scheduleSave();
   }
 
-  function moveToStage(stage) {
+  function moveStage(stage) {
     if (!state.session) return;
     saveSessionInputs();
-    state.session.stage = Math.max(0, Math.min(4, stage));
-    saveState();
+    state.session.stage = Math.max(0, Math.min(3, stage));
+    scheduleSave();
     renderPractice();
     window.scrollTo({ top: 0, behavior: "auto" });
   }
 
-  function disconnectSolution() {
-    const panel = document.getElementById("solution-panel");
-    if (!panel) return moveToStage(1);
-    panel.classList.add("is-disconnecting");
-    window.setTimeout(() => moveToStage(1), 560);
-  }
-
-  function showHint(level) {
-    if (!state.session) return;
-    const problem = findProblem(state.session.problemId);
-    state.session.hintsUsed = Math.max(state.session.hintsUsed, level);
-    ensureProblemState(problem.id).hintTotal += 1;
-    saveState();
-    renderPractice();
-    document.getElementById("hint-output")?.scrollIntoView({ block: "nearest" });
-  }
-
   function resetCode() {
-    if (!state.session) return;
-    const problem = findProblem(state.session.problemId);
-    ensureProblemState(problem.id).draft = problem.starter;
+    const problem = findProblem(state.session.problemId, state.session.libraryId);
+    const progress = ensureProblemState(problem.id, state.session.libraryId);
+    progress.draft = problem.starter || "def solve(...):\n    pass";
     state.session.testResults = null;
     state.session.testsPassed = false;
-    saveState();
+    scheduleSave();
     renderPractice();
-    showToast("已恢复起始代码。", 2200);
+    showToast("已恢复起始代码。", 2000);
   }
 
   function runTests(problem) {
     const editor = document.getElementById("code-editor");
     const consoleNode = document.getElementById("test-console");
     if (!editor || !consoleNode) return;
-
     const code = editor.value;
-    ensureProblemState(problem.id).draft = code;
-    saveState();
-
-    if (!code.includes("def solve")) {
-      consoleNode.innerHTML = `<p class="fail">ERROR · 请保留名为 solve 的函数入口。</p>`;
+    ensureProblemState(problem.id, state.session.libraryId).draft = code;
+    if (!/def\s+solve\s*\(/.test(code)) {
+      consoleNode.innerHTML = `<p class="fail"><strong>ERROR</strong><span>请保留名为 solve 的函数入口。</span></p>`;
       return;
     }
-
-    consoleNode.innerHTML = `<p class="loading">正在启动浏览器内的 Python 环境……首次加载可能需要十几秒。</p>`;
-    const runButton = document.querySelector('[data-action="run-tests"]');
-    if (runButton) {
-      runButton.disabled = true;
-      runButton.textContent = "正在运行";
+    if (!Array.isArray(problem.tests) || !problem.tests.length) {
+      consoleNode.innerHTML = `<p class="fail"><strong>NO TEST</strong><span>这道题没有可运行的测试。</span></p>`;
+      return;
     }
-
+    consoleNode.innerHTML = `<p class="console-idle">LOADING · 正在启动浏览器内 Python 环境……</p>`;
+    const runButton = document.querySelector('[data-action="run-tests"]');
+    if (runButton) { runButton.disabled = true; runButton.textContent = "正在运行"; }
     if (runner) runner.terminate();
-    runner = new Worker("./pyodide-worker.js?v=3", { type: "module" });
-
+    runner = new Worker("./pyodide-worker.js?v=4", { type: "module" });
     runnerTimeout = window.setTimeout(() => {
       runner?.terminate();
       runner = null;
-      consoleNode.innerHTML = `<p class="fail">TIMEOUT · 运行超过 45 秒。请检查是否存在死循环，或稍后重试加载环境。</p>`;
-      if (runButton) {
-        runButton.disabled = false;
-        runButton.textContent = "运行本地测试";
-      }
+      consoleNode.innerHTML = `<p class="fail"><strong>TIMEOUT</strong><span>运行超过 45 秒，请检查死循环。</span></p>`;
+      if (runButton) { runButton.disabled = false; runButton.textContent = "重试"; }
     }, 45000);
-
     runner.onmessage = (event) => {
       const payload = event.data || {};
       if (payload.type === "status") {
-        consoleNode.innerHTML = `<p class="loading">${escapeHTML(payload.message)}</p>`;
+        consoleNode.innerHTML = `<p class="console-idle">LOADING · ${escapeHTML(payload.message)}</p>`;
         return;
       }
-
       window.clearTimeout(runnerTimeout);
-      runnerTimeout = null;
       if (payload.type === "result") {
         state.session.testResults = payload.results;
         state.session.testsPassed = payload.results.length > 0 && payload.results.every((result) => result.pass);
-        saveState();
-        consoleNode.innerHTML = payload.results.map((result) => `<p class="${result.pass ? "pass" : "fail"}">${result.pass ? "PASS" : "FAIL"} · ${escapeHTML(result.label)}${result.error ? ` · ${escapeHTML(result.error)}` : ""}</p>`).join("");
-        const actions = document.querySelector(".editor-actions > div");
-        if (actions && !actions.querySelector('[data-action="show-verification"]')) {
-          actions.insertAdjacentHTML("afterbegin", `<button class="secondary-button" type="button" data-action="show-verification">查看验证结果</button>`);
-        }
+        scheduleSave();
+        consoleNode.innerHTML = `${renderTestResults(payload.results)}<p class="console-note">${state.session.testsPassed ? "全部通过，可以进入对照。" : "修正后再次运行，或先查看参考解法。"}</p>`;
       } else {
-        consoleNode.innerHTML = `<p class="fail">ERROR · ${escapeHTML(payload.message || "本地运行环境暂时不可用。")}</p>`;
+        consoleNode.innerHTML = `<p class="fail"><strong>ERROR</strong><span>${escapeHTML(payload.message || "本地运行失败")}</span></p>`;
       }
-
-      if (runButton) {
-        runButton.disabled = false;
-        runButton.textContent = "再次运行";
-      }
+      if (runButton) { runButton.disabled = false; runButton.textContent = "再次运行"; }
     };
-
     runner.onerror = () => {
       window.clearTimeout(runnerTimeout);
-      runnerTimeout = null;
-      consoleNode.innerHTML = `<p class="fail">ERROR · 无法载入本地 Python 环境。代码已经保存，可以前往官方页面继续。</p>`;
-      if (runButton) {
-        runButton.disabled = false;
-        runButton.textContent = "重试运行";
-      }
+      consoleNode.innerHTML = `<p class="fail"><strong>ERROR</strong><span>Python 环境载入失败，代码已保存。</span></p>`;
+      if (runButton) { runButton.disabled = false; runButton.textContent = "重试"; }
     };
-
-    runner.postMessage({ code, tests: problem.tests, compare: problem.compare });
+    runner.postMessage({ code, tests: problem.tests, compare: problem.compare || "exact" });
   }
 
-  function predictReview(session, progress) {
-    let quality = 1;
-    if (session.testsPassed) quality += 2;
-    if (session.hintsUsed === 0) quality += 1;
-    if (session.officialAccepted === true) quality += 1;
-    if ((session.confidence || 0) >= 4) quality += 1;
-    quality = Math.max(0, Math.min(5, quality));
-
-    const previousInterval = progress.intervalDays || 0;
-    let days;
-    if (quality <= 1) days = 0;
-    else if (quality === 2) days = 1;
-    else if (quality === 3) days = previousInterval ? Math.max(2, Math.round(previousInterval * 1.5)) : 3;
-    else if (quality === 4) days = previousInterval ? Math.max(3, Math.round(previousInterval * 2.2)) : 7;
-    else days = previousInterval ? Math.max(7, Math.round(previousInterval * 3)) : 14;
+  function predictReview(rating, previousInterval) {
+    let days = 0;
+    if (rating === 2) days = 1;
+    if (rating === 3) days = previousInterval ? Math.max(3, Math.round(previousInterval * 1.8)) : 3;
+    if (rating === 4) days = previousInterval ? Math.max(7, Math.round(previousInterval * 2.5)) : 7;
     days = Math.min(days, 90);
-
-    return {
-      quality,
-      days,
-      date: addDays(dayStart(), days),
-      label: days === 0 ? "今天稍后" : days === 1 ? "明天" : `${days} 天后`
-    };
+    return { days, date: addDays(dayStart(), days), label: days === 0 ? "今天稍后" : days === 1 ? "明天" : `${days} 天后` };
   }
 
-  function finishReview() {
-    if (!state.session) return;
-    if (!state.session.confidence) {
-      showToast("请先选择 1～5 级的真实感受。", 3000);
-      return;
-    }
-
-    const problem = findProblem(state.session.problemId);
-    const progress = ensureProblemState(problem.id);
-    const schedule = predictReview(state.session, progress);
-    const independent = state.session.testsPassed && state.session.hintsUsed === 0 && state.session.confidence >= 4;
-
+  function finishSession() {
+    const session = state.session;
+    if (!session?.rating) return showToast("先选择真实的回忆评分。", 2600);
+    const problem = findProblem(session.problemId, session.libraryId);
+    const progress = ensureProblemState(session.problemId, session.libraryId);
+    const schedule = predictReview(session.rating, progress.intervalDays || 0);
+    const independent = session.testsPassed && session.hintsUsed === 0 && !session.revealedBeforeAttempt && session.rating >= 3;
     if (independent) progress.independentPasses = (progress.independentPasses || 0) + 1;
-    if (!state.session.testsPassed || state.session.confidence <= 2) {
-      progress.status = "lapsed";
-    } else if (progress.independentPasses >= 3 && state.session.variantAnswer.trim().length >= 12) {
-      progress.status = "mastered";
-    } else {
-      progress.status = "recall";
-    }
-
+    progress.status = session.rating === 1 ? "lapsed" : progress.independentPasses >= 3 && session.rating === 4 ? "mastered" : "recall";
     progress.intervalDays = schedule.days;
-    progress.lastReviewedAt = new Date().toISOString();
     progress.nextReviewAt = schedule.date.toISOString();
-    progress.errors = [...new Set([...(progress.errors || []), ...state.session.errors])];
-    progress.lastQuality = schedule.quality;
-    progress.lastHintsUsed = state.session.hintsUsed;
-    progress.lastOfficialAccepted = state.session.officialAccepted;
-
-    state.history.unshift({
-      problemId: problem.id,
-      completedAt: new Date().toISOString(),
-      quality: schedule.quality,
-      hintsUsed: state.session.hintsUsed,
-      testsPassed: state.session.testsPassed,
-      officialAccepted: state.session.officialAccepted,
-      errors: state.session.errors,
-      nextReviewAt: schedule.date.toISOString()
-    });
-    state.history = state.history.slice(0, 200);
+    progress.lastReviewedAt = new Date().toISOString();
+    progress.lastRating = session.rating;
+    progress.errors = [...new Set([...(progress.errors || []), ...session.errors])];
+    state.history.unshift({ libraryId: session.libraryId, problemId: problem.id, completedAt: new Date().toISOString(), rating: session.rating, testsPassed: session.testsPassed, hintsUsed: session.hintsUsed, nextReviewAt: schedule.date.toISOString() });
+    state.history = state.history.slice(0, 500);
     state.session = null;
-    saveState();
     currentView = "today";
+    persistNow().catch(handleSaveError);
     updateNavigation();
     render();
-    showToast(`已完成「${problem.title}」，${schedule.label}再次复现。`, 4200);
-    window.scrollTo({ top: 0, behavior: "auto" });
+    showToast(`已保存「${problem.title}」，${schedule.label}再写一次。`, 3800);
   }
 
-  function showToast(message, duration = 2800) {
+  function normalizeLibrary(input) {
+    try {
+      if (!input || typeof input !== "object") return null;
+      const id = textField(input.id || `library-${crypto.randomUUID?.() || Date.now()}`, "题库 ID", 100);
+      const name = textField(input.name, "题库名称", 60);
+      const description = optionalText(input.description, 180);
+      if (!Array.isArray(input.problems) || input.problems.length > 500) throw new Error("problems 必须是最多 500 项的数组");
+      const seen = new Set();
+      const problems = input.problems.map((problem, index) => validateProblem(problem, index)).map((problem) => {
+        if (seen.has(problem.id)) throw new Error(`题目 ID 重复：${problem.id}`);
+        seen.add(problem.id);
+        return problem;
+      });
+      return { id, name, description, readOnly: false, problems };
+    } catch (error) {
+      console.warn("跳过无效题库", error);
+      return null;
+    }
+  }
+
+  function textField(value, label, max) {
+    const text = String(value ?? "").trim();
+    if (!text || text.length > max) throw new Error(`${label}必须为 1～${max} 个字符`);
+    return text;
+  }
+
+  function optionalText(value, max) {
+    const text = String(value ?? "").trim();
+    if (text.length > max) throw new Error(`文本不能超过 ${max} 个字符`);
+    return text;
+  }
+
+  function validateProblem(input, index = 0) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error(`第 ${index + 1} 道题不是对象`);
+    const id = textField(input.id, `第 ${index + 1} 道题的 id`, 100);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(id)) throw new Error(`题目 ${id} 的 id 只能包含字母、数字、下划线和连字符`);
+    const solutions = Array.isArray(input.solutions) ? input.solutions : [];
+    if (!solutions.length || solutions.length > 8) throw new Error(`题目 ${id} 必须包含 1～8 种 solutions`);
+    const tests = Array.isArray(input.tests) ? input.tests : [];
+    if (tests.length > 30) throw new Error(`题目 ${id} 最多包含 30 组测试`);
+    return {
+      id,
+      number: optionalText(input.number, 20),
+      title: textField(input.title, `题目 ${id} 的 title`, 120),
+      topic: optionalText(input.topic || "未分类", 60),
+      summary: textField(input.summary, `题目 ${id} 的 summary`, 1200),
+      signature: optionalText(input.signature || "solve(...) → ...", 160),
+      starter: textField(input.starter || "def solve(...):\n    pass", `题目 ${id} 的 starter`, 50000),
+      officialUrl: safeUrl(input.officialUrl),
+      hints: (Array.isArray(input.hints) ? input.hints : []).slice(0, 6).map((item) => optionalText(item, 600)),
+      solutions: solutions.map((solution, solutionIndex) => validateSolution(solution, id, solutionIndex)),
+      tests: tests.map((test, testIndex) => validateTest(test, id, testIndex)),
+      compare: ["exact", "unordered", "nestedUnordered"].includes(input.compare) ? input.compare : "exact"
+    };
+  }
+
+  function validateSolution(input, problemId, index) {
+    if (!input || typeof input !== "object") throw new Error(`题目 ${problemId} 的第 ${index + 1} 种解法无效`);
+    return {
+      id: optionalText(input.id || `solution-${index + 1}`, 100),
+      name: textField(input.name, `题目 ${problemId} 的解法名称`, 100),
+      idea: textField(input.idea, `题目 ${problemId} 的解法思路`, 3000),
+      steps: (Array.isArray(input.steps) ? input.steps : []).slice(0, 12).map((item) => optionalText(item, 600)),
+      complexity: optionalText(input.complexity, 300),
+      pitfalls: (Array.isArray(input.pitfalls) ? input.pitfalls : []).slice(0, 12).map((item) => optionalText(item, 600)),
+      code: textField(input.code, `题目 ${problemId} 的解法代码`, 50000),
+      source: input.source && typeof input.source === "object" ? { label: optionalText(input.source.label, 160), url: safeUrl(input.source.url) } : undefined
+    };
+  }
+
+  function validateTest(input, problemId, index) {
+    if (!input || typeof input !== "object") throw new Error(`题目 ${problemId} 的第 ${index + 1} 组测试无效`);
+    if (!Array.isArray(input.args)) throw new Error(`题目 ${problemId} 的测试 args 必须是数组`);
+    return { label: optionalText(input.label || `用例 ${index + 1}`, 120), args: clone(input.args), expected: clone(input.expected) };
+  }
+
+  function validateLibraryPayload(payload) {
+    if (payload?.schema !== "huixie.problem-library" || payload?.version !== 1) throw new Error("需要 schema 为 huixie.problem-library、version 为 1 的题库文件");
+    const library = normalizeLibrary(payload.library);
+    if (!library) throw new Error("题库结构无效，请检查名称、题目、解法和测试字段");
+    if (customLibraries.some((item) => item.id === library.id)) library.id = `${library.id}-${Date.now().toString(36)}`;
+    return library;
+  }
+
+  function readJsonFile(file, handler) {
+    if (!file) return;
+    if (file.size > MAX_IMPORT_BYTES) {
+      ui.libraryError = "文件超过 2 MB 限制。请拆分题库后再导入。";
+      render();
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        handler(JSON.parse(String(reader.result)));
+      } catch (error) {
+        ui.libraryError = error.message || "JSON 文件无法解析";
+        render();
+      }
+    };
+    reader.onerror = () => { ui.libraryError = "浏览器无法读取这个文件。"; render(); };
+    reader.readAsText(file);
+  }
+
+  function downloadJson(payload, filename) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function exportLibrary() {
+    const library = getLibrary();
+    if (library.readOnly) return;
+    downloadJson({ schema: "huixie.problem-library", version: 1, exportedAt: new Date().toISOString(), library }, `huixie-library-${library.id}.json`);
+    showToast("题库已导出。", 1800);
+  }
+
+  function downloadLibraryTemplate() {
+    downloadJson({
+      schema: "huixie.problem-library",
+      version: 1,
+      library: {
+        id: "my-python-review",
+        name: "我的 Python 题库",
+        description: "用于回写复习的个人题库",
+        problems: [{
+          id: "example-problem",
+          number: "",
+          title: "示例题",
+          topic: "示例模式",
+          summary: "用自己的话描述问题，不要粘贴受版权保护的完整题面。",
+          signature: "solve(nums) → int",
+          starter: "def solve(nums):\n    pass",
+          hints: ["只写一条不泄露完整答案的提示。"],
+          solutions: [{ id: "solution-1", name: "解法一", idea: "说明关键状态或不变量。", steps: ["第一步", "第二步"], complexity: "时间 O(n)，空间 O(1)。", pitfalls: ["说明易错点。"], code: "def solve(nums):\n    return len(nums)" }],
+          tests: [{ label: "基础用例", args: [[1, 2, 3]], expected: 3 }],
+          compare: "exact"
+        }]
+      }
+    }, "huixie-library-template.json");
+    showToast("题库格式示例已下载。", 1800);
+  }
+
+  function importLibrary(file) {
+    readJsonFile(file, (payload) => {
+      const library = validateLibraryPayload(payload);
+      customLibraries.push(library);
+      state.activeLibraryId = library.id;
+      ui.libraryError = "";
+      persistNow().catch(handleSaveError);
+      renderLibraries();
+      showToast(`已导入「${library.name}」的 ${library.problems.length} 道题。`, 3200);
+    });
+  }
+
+  function exportBackup() {
+    downloadJson({ schema: "huixie.workspace-backup", version: APP_VERSION, exportedAt: new Date().toISOString(), state, libraries: customLibraries }, `huixie-backup-${isoDate(new Date())}.json`);
+    showToast("工作台备份已导出。", 1800);
+  }
+
+  function importBackup(file) {
+    readJsonFile(file, (payload) => {
+      if (payload?.schema !== "huixie.workspace-backup" || payload?.version !== APP_VERSION) throw new Error("这不是兼容的回写工作台备份");
+      if (!Array.isArray(payload.libraries)) throw new Error("备份中缺少题库列表");
+      const libraries = payload.libraries.map((library) => normalizeLibrary(library));
+      if (libraries.some((library) => !library)) throw new Error("备份中包含无效题库");
+      state = normalizeState(payload.state || {});
+      state.session = null;
+      customLibraries = libraries;
+      if (!getLibrary(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
+      persistNow().catch(handleSaveError);
+      currentView = "today";
+      updateNavigation();
+      render();
+      showToast("工作台备份已恢复。", 2600);
+    });
+  }
+
+  function showToast(message, duration = 2600) {
     const node = document.createElement("div");
     node.className = "toast";
     node.textContent = message;
@@ -1035,283 +838,231 @@
   async function copyCode(button) {
     try {
       await navigator.clipboard.writeText(button.dataset.code || "");
-      showToast("参考代码已复制。", 1800);
+      showToast("代码已复制。", 1600);
     } catch {
-      showToast("浏览器未允许复制，请手动选择代码。", 2600);
+      showToast("浏览器未允许复制，请手动选择。", 2600);
     }
-  }
-
-  function exportData() {
-    const payload = JSON.stringify({ ...state, exportedAt: new Date().toISOString() }, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `huixie-progress-${isoDate(new Date())}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    showToast("学习数据已导出。", 2200);
-  }
-
-  function importData(file) {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const incoming = JSON.parse(String(reader.result));
-        if (incoming.version !== VERSION || typeof incoming.problems !== "object") throw new Error("invalid");
-        state = {
-          ...cloneDefaultState(),
-          ...incoming,
-          settings: { ...defaultState.settings, ...(incoming.settings || {}) },
-          history: Array.isArray(incoming.history) ? incoming.history : []
-        };
-        state.session = null;
-        saveState();
-        render();
-        showToast("学习数据已导入。", 2600);
-      } catch {
-        showToast("无法导入：文件不是有效的回写学习数据。", 3600);
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  function clearData(button) {
-    const now = Date.now();
-    if (now > clearArmedUntil) {
-      clearArmedUntil = now + 5000;
-      button.textContent = "再次点击确认清除";
-      showToast("此操作会删除当前浏览器中的全部进度。", 3200);
-      window.setTimeout(() => {
-        if (Date.now() >= clearArmedUntil) {
-          clearArmedUntil = 0;
-          if (button.isConnected) button.textContent = "清除全部数据";
-        }
-      }, 5100);
-      return;
-    }
-
-    localStorage.removeItem(STORAGE_KEY);
-    state = cloneDefaultState();
-    clearArmedUntil = 0;
-    currentView = "today";
-    updateNavigation();
-    render();
-    showToast("本机学习数据已清除，无法恢复。", 3600);
   }
 
   root.addEventListener("click", (event) => {
     const target = event.target.closest("button, a");
     if (!target) return;
-    const action = target.dataset.action;
-
     if (target.dataset.view) {
       event.preventDefault();
       setView(target.dataset.view);
       return;
     }
-
+    const action = target.dataset.action;
     if (!action) return;
-    if (action === "accept-defaults") {
-      state.onboarded = true;
-      saveState();
-      renderToday();
-      showToast("默认计划已启用。", 2200);
-    } else if (action === "start-problem") {
-      startProblem(target.dataset.problemId);
-    } else if (action === "leave-practice") {
-      saveSessionInputs();
-      currentView = "today";
-      updateNavigation();
-      render();
-    } else if (action === "disconnect-solution") {
-      disconnectSolution();
-    } else if (action === "relearn") {
-      moveToStage(0);
-    } else if (action === "show-hint") {
-      showHint(Number(target.dataset.hintLevel));
-    } else if (action === "reset-code") {
-      resetCode();
-    } else if (action === "run-tests") {
-      runTests(findProblem(state.session.problemId));
-    } else if (action === "skip-to-verify" || action === "show-verification") {
-      moveToStage(3);
-    } else if (action === "back-to-code") {
-      moveToStage(2);
-    } else if (action === "to-review") {
-      moveToStage(4);
-    } else if (action === "official-result") {
-      state.session.officialAccepted = target.dataset.value === "accepted";
-      saveState();
-      moveToStage(4);
-    } else if (action === "set-confidence") {
-      state.session.confidence = Number(target.dataset.value);
-      saveState();
+
+    if (action === "start-problem") startProblem(target.dataset.problemId, target.dataset.libraryId || state.activeLibraryId);
+    else if (action === "leave-practice") { saveSessionInputs(); setView("today"); }
+    else if (action === "show-hint") {
+      const problem = findProblem(state.session.problemId, state.session.libraryId);
+      const nextHint = Math.min((ui.revealedHint || 0) + 1, Math.max(1, problem.hints?.length || 1));
+      if (nextHint > ui.revealedHint) state.session.hintsUsed += 1;
+      ui.revealedHint = nextHint;
+      scheduleSave();
       renderPractice();
-    } else if (action === "copy-code") {
-      copyCode(target);
-    } else if (action === "export-data") {
-      exportData();
-    } else if (action === "import-data") {
-      document.getElementById("import-file")?.click();
-    } else if (action === "clear-data") {
-      clearData(target);
     }
+    else if (action === "preview-solution") {
+      ui.previewOpen = !ui.previewOpen;
+      if (ui.previewOpen) state.session.revealedBeforeAttempt = true;
+      scheduleSave();
+      renderPractice();
+    }
+    else if (action === "reset-code") resetCode();
+    else if (action === "back-stage") moveStage(state.session.stage - 1);
+    else if (action === "run-tests") runTests(findProblem(state.session.problemId, state.session.libraryId));
+    else if (action === "go-compare") moveStage(2);
+    else if (action === "back-to-code") moveStage(1);
+    else if (action === "go-schedule") moveStage(3);
+    else if (action === "set-rating") { state.session.rating = Number(target.dataset.value); scheduleSave(); renderPractice(); }
+    else if (action === "toggle-solution") {
+      const key = target.dataset.solutionKey;
+      if (ui.expandedSolutions.has(key)) ui.expandedSolutions.delete(key);
+      else ui.expandedSolutions.add(key);
+      renderPractice();
+    }
+    else if (action === "copy-code") copyCode(target);
+    else if (action === "select-library") { state.activeLibraryId = target.dataset.libraryId; ui.editor = null; scheduleSave(); renderLibraries(); }
+    else if (action === "new-library") { ui.editor = { type: "library", mode: "new" }; renderLibraries(); }
+    else if (action === "edit-library") { ui.editor = { type: "library", mode: "edit" }; renderLibraries(); }
+    else if (action === "new-problem") { ui.editor = { type: "problem" }; renderLibraries(); }
+    else if (action === "edit-problem") { ui.editor = { type: "problem", problemId: target.dataset.problemId }; renderLibraries(); }
+    else if (action === "close-editor") { ui.editor = null; renderLibraries(); }
+    else if (action === "delete-problem") {
+      const library = getLibrary();
+      const problem = findProblem(target.dataset.problemId);
+      if (problem && window.confirm(`从「${library.name}」删除「${problem.title}」？此操作无法恢复。`)) {
+        library.problems = library.problems.filter((item) => item.id !== problem.id);
+        delete state.progress[progressKey(library.id, problem.id)];
+        persistNow().catch(handleSaveError);
+        renderLibraries();
+      }
+    }
+    else if (action === "delete-library") {
+      const library = getLibrary();
+      if (!library.readOnly && window.confirm(`删除题库「${library.name}」及其本机进度？此操作无法恢复。`)) {
+        customLibraries = customLibraries.filter((item) => item.id !== library.id);
+        Object.keys(state.progress).filter((key) => key.startsWith(`${library.id}::`)).forEach((key) => delete state.progress[key]);
+        state.activeLibraryId = BUILTIN_LIBRARY_ID;
+        persistNow().catch(handleSaveError);
+        renderLibraries();
+      }
+    }
+    else if (action === "import-library") document.getElementById("library-import-file")?.click();
+    else if (action === "download-library-template") downloadLibraryTemplate();
+    else if (action === "export-library") exportLibrary();
+    else if (action === "export-backup") exportBackup();
+    else if (action === "import-backup") document.getElementById("backup-import-file")?.click();
+    else if (action === "clear-data") clearAllData(target);
   });
 
   root.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (event.target.id === "recall-form") {
-      const data = new FormData(event.target);
-      const idea = String(data.get("idea") || "").trim();
-      if (idea.length < 12) {
-        showToast("先用自己的话写出至少两步解法，再进入编辑器。", 3300);
-        document.getElementById("recall-idea")?.focus();
-        return;
-      }
-      const progress = ensureProblemState(state.session.problemId);
-      progress.recallPattern = String(data.get("pattern") || "");
-      progress.recallIdea = idea;
-      progress.recallInvariant = String(data.get("invariant") || "");
-      saveState();
-      moveToStage(2);
-    } else if (event.target.id === "review-form") {
-      const data = new FormData(event.target);
+    const form = event.target;
+    if (form.id === "recall-form") {
+      const data = new FormData(form);
+      const plan = String(data.get("plan") || "").trim();
+      if (plan.length < 12) return showToast("先写下至少一句完整的解题骨架。", 2800);
+      const progress = ensureProblemState(state.session.problemId, state.session.libraryId);
+      progress.recallPattern = String(data.get("pattern") || "").trim();
+      progress.recallPlan = plan;
+      scheduleSave();
+      moveStage(1);
+    } else if (form.id === "schedule-form") {
+      const data = new FormData(form);
       state.session.errors = data.getAll("error").map(String);
-      state.session.variantAnswer = String(data.get("variant") || "");
-      finishReview();
-    } else if (event.target.id === "settings-form") {
-      const data = new FormData(event.target);
-      state.settings.minutes = Number(data.get("minutes")) || 25;
-      state.settings.syntaxReady = data.get("syntaxReady") === "true";
-      state.onboarded = true;
-      saveState();
-      showToast("设置已保存，今日队列已重新计算。", 2800);
+      finishSession();
+    } else if (form.id === "settings-form") {
+      state.settings.minutes = Number(new FormData(form).get("minutes")) || 25;
+      scheduleSave();
+      showToast("每日复习预算已保存。", 2000);
       setView("today");
+    } else if (form.id === "library-form") {
+      const data = new FormData(form);
+      try {
+        const name = textField(data.get("name"), "题库名称", 60);
+        const description = optionalText(data.get("description"), 180);
+        if (ui.editor.mode === "edit") {
+          const library = getLibrary();
+          library.name = name;
+          library.description = description;
+        } else {
+          const library = { id: `library-${Date.now().toString(36)}`, name, description, readOnly: false, problems: [] };
+          customLibraries.push(library);
+          state.activeLibraryId = library.id;
+        }
+        ui.editor = null;
+        persistNow().catch(handleSaveError);
+        renderLibraries();
+      } catch (error) {
+        showToast(error.message, 3000);
+      }
+    } else if (form.id === "problem-form") {
+      try {
+        const incoming = JSON.parse(String(new FormData(form).get("problemJson") || ""));
+        const problem = validateProblem(incoming);
+        const library = getLibrary();
+        const existingId = ui.editor.problemId;
+        if (library.problems.some((item) => item.id === problem.id && item.id !== existingId)) throw new Error(`题目 ID 已存在：${problem.id}`);
+        if (existingId) library.problems = library.problems.map((item) => item.id === existingId ? problem : item);
+        else library.problems.push(problem);
+        ui.editor = null;
+        persistNow().catch(handleSaveError);
+        renderLibraries();
+        showToast(`已保存「${problem.title}」。`, 2200);
+      } catch (error) {
+        showToast(`无法保存：${error.message}`, 4200);
+      }
     }
   });
 
   root.addEventListener("change", (event) => {
-    if (event.target.id === "import-file") importData(event.target.files?.[0]);
+    if (event.target.id === "library-import-file") importLibrary(event.target.files?.[0]);
+    if (event.target.id === "backup-import-file") importBackup(event.target.files?.[0]);
+    if (event.target.closest("#schedule-form") && state.session) {
+      state.session.errors = new FormData(event.target.closest("#schedule-form")).getAll("error").map(String);
+      scheduleSave();
+    }
   });
 
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    if (button.closest("#view-root")) return;
-    button.addEventListener("click", () => setView(button.dataset.view));
-  });
-
-  window.addEventListener("beforeunload", saveSessionInputs);
-
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./service-worker.js").catch(() => {
-        // 离线缓存失败不影响核心学习流程。
-      });
-    });
+  async function clearAllData(button) {
+    const now = Date.now();
+    if (now > clearArmedUntil) {
+      clearArmedUntil = now + 5000;
+      button.textContent = "再次点击确认清除";
+      showToast("将删除自定义题库、草稿和全部复习记录。", 3200);
+      window.setTimeout(() => {
+        if (Date.now() >= clearArmedUntil && button.isConnected) button.textContent = "清除本机数据";
+      }, 5100);
+      return;
+    }
+    await storage.clear();
+    localStorage.removeItem(LEGACY_KEY);
+    state = clone(defaultState);
+    customLibraries = [];
+    clearArmedUntil = 0;
+    currentView = "today";
+    updateNavigation();
+    render();
+    showToast("本机数据已清除，无法恢复。", 3400);
   }
 
-  window.huixie = {
-    getState: () => JSON.parse(JSON.stringify(state)),
-    getTodayQueue: () => getQueue().map((problem) => ({ id: problem.id, title: problem.title, topic: problem.topic })),
-    startProblem: (problemId) => startProblem(problemId),
-    openView: (view) => setView(view)
-  };
+  document.querySelectorAll(".top-rail [data-view]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
+  window.addEventListener("beforeunload", saveSessionInputs);
+
+  function registerServiceWorker() {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+  }
 
   function registerWebMCPTools() {
     const context = document.modelContext;
     if (!context?.registerTool) return;
-
-    const lifecycle = new AbortController();
-    const register = (tool) => {
-      try {
-        Promise.resolve(context.registerTool(tool, { signal: lifecycle.signal })).catch(() => {});
-      } catch {
-        // WebMCP 仍是渐进能力，注册失败不影响可见界面。
-      }
-    };
-
+    const register = (tool) => { try { Promise.resolve(context.registerTool(tool)).catch(() => {}); } catch {} };
     register({
       name: "get_today_training",
-      title: "读取今日训练",
-      description: "读取回写当前生成的今日训练队列和预计用时，不修改学习状态。",
+      title: "读取今日回写队列",
+      description: "读取当前题库的今日复习队列，不修改学习状态。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, untrustedContentHint: false },
-      execute() {
-        const queue = getQueue();
-        return {
-          dailyMinutes: state.settings.minutes,
-          items: queue.map((problem) => ({
-            problemId: problem.id,
-            title: problem.title,
-            topic: problem.topic,
-            kind: problemState(problem.id).firstSeenAt ? "review" : "new"
-          }))
-        };
-      }
+      execute() { return { library: getLibrary().name, dailyMinutes: state.settings.minutes, items: getQueue().map((problem) => ({ problemId: problem.id, title: problem.title, topic: problem.topic })) }; }
     });
-
     register({
       name: "start_training_problem",
-      title: "开始一道训练",
-      description: "打开指定题目的可见训练流程；省略 problemId 时开始今日队列第一项。",
-      inputSchema: {
-        type: "object",
-        properties: { problemId: { type: "string", description: "路线中的稳定题目 ID" } },
-        additionalProperties: false
-      },
+      title: "开始回写一道题",
+      description: "打开指定题目的回忆与默写流程。",
+      inputSchema: { type: "object", properties: { problemId: { type: "string" } }, additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       execute(input) {
-        const requested = input?.problemId;
-        const problem = requested ? PROBLEMS.find((item) => item.id === requested) : getQueue()[0];
-        if (!problem) throw new Error("没有找到可开始的题目");
+        const problem = input?.problemId ? findProblem(input.problemId) : getQueue()[0];
+        if (!problem) throw new Error("没有可开始的题目");
         startProblem(problem.id);
-        return { started: true, problemId: problem.id, title: problem.title, stage: state.session.stage };
-      }
-    });
-
-    register({
-      name: "set_daily_training_minutes",
-      title: "调整每日训练时间",
-      description: "把每日训练预算设置为 15、25 或 45 分钟，并立即重新计算今日队列。",
-      inputSchema: {
-        type: "object",
-        properties: { minutes: { type: "integer", enum: [15, 25, 45] } },
-        required: ["minutes"],
-        additionalProperties: false
-      },
-      annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
-        if (![15, 25, 45].includes(input?.minutes)) throw new Error("minutes 必须是 15、25 或 45");
-        state.settings.minutes = input.minutes;
-        state.onboarded = true;
-        saveState();
-        currentView = "today";
-        updateNavigation();
-        render();
-        return { saved: true, dailyMinutes: state.settings.minutes, queueSize: getQueue().length };
-      }
-    });
-
-    register({
-      name: "get_learning_progress",
-      title: "读取学习进度",
-      description: "读取已学习、曾闭卷通过和稳定掌握的题目数量，不修改学习状态。",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      annotations: { readOnlyHint: true, untrustedContentHint: false },
-      execute() {
-        return {
-          totalProblems: PROBLEMS.length,
-          learned: PROBLEMS.filter((problem) => problemState(problem.id).firstSeenAt).length,
-          independentlyReproduced: PROBLEMS.filter((problem) => problemState(problem.id).independentPasses > 0).length,
-          mastered: PROBLEMS.filter((problem) => problemState(problem.id).status === "mastered").length
-        };
+        return { started: true, problemId: problem.id, title: problem.title };
       }
     });
   }
 
-  registerWebMCPTools();
+  async function init() {
+    root.innerHTML = `<section class="boot-screen"><span class="boot-pulse"></span><p>正在接通本机题库与复习记录……</p></section>`;
+    await loadWorkspace();
+    currentView = state.session ? "practice" : "today";
+    updateNavigation();
+    render();
+    registerServiceWorker();
+    registerWebMCPTools();
+    window.huixie = {
+      getState: () => clone(state),
+      getLibraries: () => allLibraries().map((library) => ({ id: library.id, name: library.name, problemCount: library.problems.length })),
+      getTodayQueue: () => getQueue().map((problem) => ({ id: problem.id, title: problem.title })),
+      openView: setView,
+      startProblem
+    };
+  }
 
-  updateNavigation();
-  render();
+  init().catch((error) => {
+    console.error(error);
+    root.innerHTML = `<section class="empty-state"><h1>工作台没有启动</h1><p>本机存储初始化失败。请刷新页面，或使用无痕窗口排查浏览器存储权限。</p></section>`;
+  });
 })();

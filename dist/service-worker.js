@@ -1,5 +1,5 @@
-const CACHE_NAME = "huixie-shell-v10";
-const CORE_ASSETS = ["./", "./index.html", "./styles.css?v=4", "./problems.js?v=3", "./app.js?v=7", "./pyodide-worker.js?v=3", "./fonts/SmileySans-Oblique.woff2", "./fonts/OFL.txt", "./THIRD_PARTY_NOTICES.txt"];
+const CACHE_NAME = "huixie-shell-v15";
+const CORE_ASSETS = ["./", "./index.html", "./styles.css?v=6", "./problems.js?v=3", "./solution-variants.js?v=1", "./storage.js?v=1", "./app.js?v=11", "./pyodide-worker.js?v=4", "./fonts/SmileySans-Oblique.woff2", "./fonts/OFL.txt", "./THIRD_PARTY_NOTICES.txt"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)));

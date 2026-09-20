@@ -1,0 +1,70 @@
+# 自定义题库 JSON 格式
+
+回写 `0.2.0` 使用版本化 JSON 导入、导出自定义题库。文件顶层必须声明：
+
+```json
+{
+  "schema": "huixie.problem-library",
+  "version": 1,
+  "library": {}
+}
+```
+
+网站“题库”页面提供“下载格式示例”，可直接以该文件为起点编辑。
+
+## 题库字段
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | 是 | 题库稳定标识，最长 100 字符 |
+| `name` | string | 是 | 显示名称，最长 60 字符 |
+| `description` | string | 否 | 简介，最长 180 字符 |
+| `problems` | array | 是 | 题目列表，最多 500 项 |
+
+## 题目字段
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | 是 | 题目稳定标识；只允许字母、数字、下划线和连字符 |
+| `number` | string / number | 否 | 题号或个人编号 |
+| `title` | string | 是 | 题目名称 |
+| `topic` | string | 否 | 模式或主题 |
+| `summary` | string | 是 | 问题摘要；建议自己概述，不粘贴完整受版权保护题面 |
+| `signature` | string | 否 | 例如 `solve(nums) → int` |
+| `starter` | string | 是 | Python 3 起始代码，入口函数固定为 `solve` |
+| `officialUrl` | string | 否 | 仅接受 HTTPS 链接 |
+| `hints` | string[] | 否 | 最多 6 条提示 |
+| `solutions` | array | 是 | 1～8 种解法 |
+| `tests` | array | 否 | 最多 30 组本地测试 |
+| `compare` | string | 否 | `exact`、`unordered` 或 `nestedUnordered` |
+
+## 解法字段
+
+每项 `solutions` 包含：
+
+- `id`：解法标识。
+- `name`：解法名称。
+- `idea`：核心思路。
+- `steps`：关键步骤数组。
+- `complexity`：时间与空间复杂度。
+- `pitfalls`：易错点数组。
+- `code`：完整 Python 3 代码，必须定义 `solve`。
+- `source`：可选对象，包含来源名称 `label` 和 HTTPS 链接 `url`。
+
+## 测试字段
+
+每项 `tests` 包含：
+
+- `label`：用例名称。
+- `args`：传给 `solve(*args)` 的参数数组。
+- `expected`：期望的 JSON 可序列化返回值。
+
+例如 `solve([1, 2, 3])` 的参数应写为 `"args": [[1, 2, 3]]`。
+
+## 安全边界
+
+- 导入文件最大 2 MB。
+- 说明文字只作为纯文本渲染，不执行 HTML。
+- 链接只允许 HTTPS。
+- Python 代码只在浏览器 Pyodide Worker 中执行。
+- 本地测试不是官方判题，最终结果仍以题目来源平台为准。
