@@ -1,0 +1,8 @@
+apps:
+  - port: 8080
+    run: python3 -m http.server 8080 --directory dist --bind 0.0.0.0
+    root: .
+    name: 回写网站
+    autoOpen: true
+    autoPreview: true
+    mainPort: true

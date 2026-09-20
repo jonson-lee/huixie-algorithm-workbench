@@ -33,6 +33,13 @@ python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 
 浏览器验收必须覆盖：新题学习、闭卷复述、编码、本地测试、官方结果标记、复盘、断点续学、390px 手机布局和宽屏布局。
 
+## Cloud Studio 部署
+
+- `.vscode/preview.yml` 使用 `python3 -m http.server` 在 8080 端口提供 `dist/`。
+- Cloud Studio 启动后会生成 `*.cloudstudio.club` 公开预览地址；工作空间休眠或停止时，该地址不可访问。
+- Cloud Studio 版本从 jsDelivr 加载 Pyodide 314.0.6，以减小上传包；Python 代码仍只在浏览器本地执行。
+- 2026-09-20 已验证公开地址返回 HTTP 200，并完成“两数之和”三组浏览器内 Python 测试。
+
 ## 内容与品牌边界
 
 - 不抓取、镜像或复制官方题面、示例、题解、测试与品牌视觉。

@@ -2,3 +2,13 @@
 .sites-runtime/
 work/
 outputs/
+node_modules/
+.idea/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+.vscode/*
+!.vscode/preview.yml
