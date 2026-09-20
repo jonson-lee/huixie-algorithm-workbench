@@ -44,3 +44,7 @@ node scripts/verify-content.mjs
 Pyodide 和 Smiley Sans 的许可文件随分发文件保留，详见 `dist/THIRD_PARTY_NOTICES.txt`、`dist/pyodide/LICENSE` 与 `dist/fonts/OFL.txt`。
 
 本项目目前未声明开源许可证；除上述第三方组件外，保留所有权利。
+
+## 版本记录
+
+用户可感知的新增、变更和修复统一记录在 [CHANGELOG.md](CHANGELOG.md)。尚在讨论或尚未完成的事项不会写成已发布功能。
