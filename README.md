@@ -1,12 +1,12 @@
 # 回写
 
-面向已有编程经验用户的免费算法记忆工作台。当前开发版聚焦 Hot 100 的代表题，采用“回忆模式 → 默写 Python → 对照多解 → 安排复习”的主动回忆闭环。
+面向已有编程经验用户的免费算法记忆工作台。当前开发版覆盖完整 Hot 100，采用“回忆模式 → 默写 Python → 对照多解 → 安排复习”的主动回忆闭环。
 
 ## 当前范围
 
 - 只支持 Python 3
-- 13 道代表题，用于验证学习机制，而不是完整 Hot 100
-- 每题 2 种独立编写的解法，共 26 份参考实现
+- 完整 Hot 100，共 100 道内置题
+- 每题 2 种独立编写的解法，共 200 份参考实现和 213 组本地测试
 - 个性化复习队列、闭卷回忆、代码默写和透明间隔安排
 - 支持创建、编辑、导入、导出和删除本机自定义题库
 - 自定义题库可携带多种题解、Python 代码和测试用例，格式见 [docs/LIBRARY_FORMAT.md](docs/LIBRARY_FORMAT.md)
@@ -27,6 +27,7 @@ python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 node --check dist/app.js
 node --check dist/problems.js
 node --check dist/solution-variants.js
+node --check dist/hot100-extra.js
 node --check dist/storage.js
 node --check dist/pyodide-worker.js
 node --check dist/service-worker.js

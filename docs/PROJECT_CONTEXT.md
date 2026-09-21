@@ -11,6 +11,7 @@
 - 单页静态网站，入口在 `dist/index.html`。
 - `dist/problems.js` 保存原创摘要、主解法、提示和测试。
 - `dist/solution-variants.js` 为 13 道内置题补充第二种独立 Python 解法，并规范化一题多解数据。
+- `dist/hot100-extra.js` 补充其余 87 道题，使内置题库完整覆盖当前 Hot 100；每题包含 2 种独立 Python 解法和至少 2 组本地测试。
 - `dist/storage.js` 封装 IndexedDB；不可用时降级到 `localStorage` 兼容模式。
 - `dist/app.js` 负责四阶段回写、个性化队列、题库管理、导入校验、间隔复习及 WebMCP。
 - `dist/pyodide-worker.js` 在模块化 Web Worker 中运行 Python。
@@ -29,6 +30,7 @@
 node --check dist/app.js
 node --check dist/problems.js
 node --check dist/solution-variants.js
+node --check dist/hot100-extra.js
 node --check dist/storage.js
 node --check dist/pyodide-worker.js
 node --check dist/service-worker.js
@@ -47,6 +49,7 @@ python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 - 线上验收已确认回忆页显示“先在脑中走一遍”和“开始默写”，且不再出现“写下代码之前的两件事”。
 - 既有线上验收已覆盖四阶段闭卷回写、13 题 Hot 100 列表、多解法标识和自定义题库管理入口。
 - 发布前本地内容校验通过：13 份 starter 可编译，26 份参考实现通过 78 组测试。
+- 完整 Hot 100 扩充目前处于未发布状态；本地已验证 100 份 starter、200 份参考实现和 426 次解法用例组合。
 
 ## 内容与品牌边界
 

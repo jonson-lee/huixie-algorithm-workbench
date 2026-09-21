@@ -12,7 +12,7 @@
   const builtinLibrary = {
     id: BUILTIN_LIBRARY_ID,
     name: "Hot 100",
-    description: "内置精选题库 · 当前 13 题",
+    description: "内置完整题库 · 100 题",
     readOnly: true,
     problems: Array.isArray(window.PROBLEMS) ? window.PROBLEMS : []
   };
