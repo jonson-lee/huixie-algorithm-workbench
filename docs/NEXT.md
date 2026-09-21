@@ -2,7 +2,7 @@
 
 ## 0.3.1 发布后验证
 
-- 使用实际 Cloud Studio URL 验证 CDN Pyodide、Service Worker 更新接管和首次离线后的提示。
+- 在实际 Cloud Studio URL 验证首次离线后的提示；CDN Pyodide 和 Service Worker 更新接管已通过线上验收。
 - 在 Safari 与真实移动设备上复核编辑器退出手势、底部导航安全区和长题库筛选。
 - 继续把站内 `solve` 适配签名与 LeetCode 官方提交签名并列展示，降低复制迁移成本。
 - 为高风险结构题增加对象身份、原地修改和输入恢复属性测试。
