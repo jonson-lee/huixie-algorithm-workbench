@@ -36,7 +36,15 @@
 | `hints` | string[] | 否 | 最多 6 条提示 |
 | `solutions` | array | 是 | 1～8 种解法 |
 | `tests` | array | 否 | 最多 30 组本地测试 |
-| `compare` | string | 否 | `exact`、`unordered` 或 `nestedUnordered` |
+| `compare` | string | 否 | 答案比较模式，见下文 |
+
+`compare` 支持：
+
+- `exact`：完整 JSON 结构与顺序一致。
+- `unordered`：忽略一维列表顺序。
+- `outerUnordered`：忽略最外层结果顺序，但保留每个内层结果的顺序，适合全排列和 N 皇后。
+- `nestedUnordered`：同时忽略外层与各内层列表顺序，适合子集和分组结果。
+- `longestPalindrome`、`balancedBst`：内置题库使用的专用语义校验器；自定义题库通常不应依赖这两个模式。
 
 ## 解法字段
 
@@ -67,4 +75,5 @@
 - 说明文字只作为纯文本渲染，不执行 HTML。
 - 链接只允许 HTTPS。
 - Python 代码只在浏览器 Pyodide Worker 中执行。
+- 运行时加载后会关闭 Worker 的网络与同源存储入口，并限制导入、运行时间和输出大小；浏览器端执行仍不等于可证明的安全沙箱，只应运行可信题库。
 - 本地测试不是官方判题，最终结果仍以题目来源平台为准。

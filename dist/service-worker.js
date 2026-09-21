@@ -1,9 +1,8 @@
-const CACHE_NAME = "huixie-shell-v17";
-const CORE_ASSETS = ["./", "./index.html", "./styles.css?v=7", "./problems.js?v=3", "./solution-variants.js?v=1", "./hot100-extra.js?v=1", "./storage.js?v=1", "./app.js?v=13", "./pyodide-worker.js?v=4", "./fonts/SmileySans-Oblique.woff2", "./fonts/OFL.txt", "./THIRD_PARTY_NOTICES.txt"];
+const CACHE_NAME = "huixie-shell-v19";
+const CORE_ASSETS = ["./", "./index.html", "./styles.css?v=9", "./problems.js?v=3", "./solution-variants.js?v=2", "./hot100-extra.js?v=2", "./storage.js?v=2", "./app.js?v=14", "./judge.js?v=1", "./pyodide-worker.js?v=5", "./fonts/SmileySans-Oblique.woff2", "./fonts/OFL.txt", "./THIRD_PARTY_NOTICES.txt"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)));
-  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
@@ -20,9 +19,12 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate") {
     event.respondWith(
       fetch(event.request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+        .then(async (response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put("./index.html", copy);
+          }
           return response;
         })
         .catch(() => caches.match("./index.html"))
@@ -31,9 +33,12 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+    caches.match(event.request).then((cached) => cached || fetch(event.request).then(async (response) => {
+      if (response.ok) {
+        const copy = response.clone();
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(event.request, copy);
+      }
       return response;
     }))
   );

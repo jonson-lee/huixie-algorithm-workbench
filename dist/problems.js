@@ -418,18 +418,18 @@ def solve(values):
     topic: "二叉树",
     level: "进阶",
     minutes: 25,
-    prerequisites: ["递归", "树节点", "返回值定义"],
+    prerequisites: ["树节点", "显式栈", "深度状态"],
     summary: "求一棵二叉树从根节点到最远叶子节点所包含的节点数。输入仍使用层序数组。",
     signature: "solve(values) → int",
-    why: "根节点的最大深度完全由左右子树决定：取更深的一边，再加上根节点自己。",
-    insight: "先把递归函数定义清楚：depth(node) 返回“以 node 为根的子树深度”。定义确定后，代码只有递归关系和空节点基线。",
+    why: "每个栈元素同时保存节点与它所在的深度；弹出节点时更新最大值，再把孩子按深度加一压栈。",
+    insight: "显式保存深度状态可以保持递归定义的清晰度，同时避开退化树触发 Python 递归上限。",
     steps: [
-      "空节点的深度是 0。",
-      "分别取得左、右子树深度。",
-      "返回 1 + max(left_depth, right_depth)。",
-      "对整棵树的根节点调用该函数。"
+      "空树直接返回 0。",
+      "把根节点与深度 1 一起压栈。",
+      "每次弹出节点，用其深度更新答案。",
+      "把非空孩子连同 depth + 1 压栈。"
     ],
-    complexity: "时间 O(n)，递归栈最坏 O(n)。",
+    complexity: "时间 O(n)，显式栈最坏 O(n)。",
     trace: [
       ["叶子", "深度 1"],
       ["父节点", "1 + max"],
@@ -479,17 +479,22 @@ def build_tree(values):
 
 def solve(values):
     root = build_tree(values)
-
-    def depth(node):
-        if node is None:
-            return 0
-        return 1 + max(depth(node.left), depth(node.right))
-
-    return depth(root)`,
+    if root is None:
+        return 0
+    best = 0
+    stack = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        best = max(best, depth)
+        if node.left:
+            stack.append((node.left, depth + 1))
+        if node.right:
+            stack.append((node.right, depth + 1))
+    return best`,
     hints: [
-      "方向：当前节点的答案由左右子树的答案组合出来。",
-      "关键量：depth(None) 必须明确等于 0。",
-      "骨架：return 1 + max(depth(node.left), depth(node.right))。"
+      "方向：遍历树时，把节点所在深度一起保存。",
+      "关键量：根节点深度从 1 开始。",
+      "骨架：stack 保存 (node, depth)，孩子压入 depth + 1。"
     ],
     tests: [
       { label: "左右深度不同", args: [[3, 9, 20, null, null, 15, 7]], expected: 3 },
@@ -511,14 +516,14 @@ def solve(values):
     summary: "网格中的 1 表示陆地、0 表示水。上下左右相连的陆地属于同一座岛，计算岛屿总数。",
     signature: "solve(grid) → int",
     why: "看到一块尚未访问的陆地，就发现了一座新岛；随后一次搜索可以把整座岛全部标记，避免重复计数。",
-    insight: "外层循环负责“发现新连通块”，DFS 负责“消掉这个连通块的所有未访问节点”。",
+    insight: "外层循环负责“发现新连通块”，显式栈 DFS 负责“消掉这个连通块的所有未访问节点”，避免 Python 递归深度限制。",
     steps: [
       "遍历每个网格位置。",
-      "遇到 1 时，岛屿数加一，并从这里启动 DFS。",
-      "DFS 越界、遇水或遇到已访问位置就返回。",
-      "把当前陆地改成 0，再搜索上下左右。"
+      "遇到 1 时，岛屿数加一，把它标为 0 并压入栈。",
+      "持续弹出陆地，检查上下左右四个邻居。",
+      "邻居为 1 时立即标为 0 并入栈，避免重复访问。"
     ],
-    complexity: "时间 O(mn)，递归栈最坏 O(mn)。",
+    complexity: "时间 O(mn)，显式栈最坏 O(mn)。",
     trace: [
       ["发现 1", "count + 1"],
       ["DFS", "淹没相邻 1"],
@@ -533,31 +538,25 @@ def solve(values):
         return 0
 
     rows, cols = len(grid), len(grid[0])
-
-    def flood(row, col):
-        if row < 0 or row >= rows or col < 0 or col >= cols:
-            return
-        if grid[row][col] == 0:
-            return
-
-        grid[row][col] = 0
-        flood(row - 1, col)
-        flood(row + 1, col)
-        flood(row, col - 1)
-        flood(row, col + 1)
-
     islands = 0
     for row in range(rows):
         for col in range(cols):
             if grid[row][col] == 1:
                 islands += 1
-                flood(row, col)
+                grid[row][col] = 0
+                stack = [(row, col)]
+                while stack:
+                    current_row, current_col = stack.pop()
+                    for next_row, next_col in ((current_row - 1, current_col), (current_row + 1, current_col), (current_row, current_col - 1), (current_row, current_col + 1)):
+                        if 0 <= next_row < rows and 0 <= next_col < cols and grid[next_row][next_col] == 1:
+                            grid[next_row][next_col] = 0
+                            stack.append((next_row, next_col))
 
     return islands`,
     hints: [
       "方向：每发现一块未访问陆地，就计数一次并遍历整座岛。",
       "关键量：可以直接把访问过的 1 改成 0，省去额外 visited 集合。",
-      "骨架：双层循环发现 1；flood 中先判断边界和 0，再置 0 并递归四个方向。"
+      "骨架：双层循环发现 1；置 0 后压栈，循环扩展四个方向。"
     ],
     tests: [
       { label: "两座分离小岛", args: [[[1, 1, 0], [0, 1, 0], [1, 0, 0]]], expected: 2 },

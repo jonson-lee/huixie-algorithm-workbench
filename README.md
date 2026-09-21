@@ -32,6 +32,7 @@ node --check dist/storage.js
 node --check dist/pyodide-worker.js
 node --check dist/service-worker.js
 node scripts/verify-content.mjs
+node scripts/verify-regressions.mjs
 ```
 
 ## Cloud Studio
@@ -43,8 +44,17 @@ node scripts/verify-content.mjs
 - 不抓取或镜像 LeetCode／力扣官方题面、题解、测试与品牌视觉。
 - 解题文字、代码、例子和本地测试保持独立创作；公开题解只作为研究和可追溯参考。
 - 导入说明按纯文本渲染，外部链接仅接受 HTTPS，用户代码只在浏览器 Worker 中执行。
+- Worker 在 Python 运行时加载后关闭网络与同源存储能力，并限制导入、运行时间和结果大小；仍只应运行自己信任的题库代码。
 - 本地测试只用于学习反馈，最终结果以官方平台提交为准。
 - 不接入 LeetCode 账号、Cookie 或提交记录。
+
+## Cloud Studio 发布包
+
+```bash
+scripts/build-cloudstudio-release.sh 0.3.1
+```
+
+脚本会生成 `work/huixie-cloudstudio-v0.3.1.zip`，把 Cloud Studio Worker 切换为固定版本的 Pyodide CDN，并验证共享判题模块已包含、上传包未错误引用缺失的自托管运行时。
 
 ## 第三方组件与许可
 

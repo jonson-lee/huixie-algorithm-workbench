@@ -9,6 +9,7 @@
   const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
   const ERROR_OPTIONS = ["题型识别错误", "关键不变量遗忘", "边界条件遗漏", "复杂度判断错误", "代码实现错误", "Python API 遗忘"];
   const STATUS_LABELS = { new: "未开始", learning: "记忆中", recall: "待复习", mastered: "已掌握", lapsed: "需重写" };
+  const COMPARE_MODES = ["exact", "unordered", "outerUnordered", "nestedUnordered", "longestPalindrome", "balancedBst"];
   const builtinLibrary = {
     id: BUILTIN_LIBRARY_ID,
     name: "Hot 100",
@@ -31,10 +32,22 @@
   let currentView = "today";
   let runner = null;
   let runnerTimeout = null;
+  let runnerGeneration = 0;
   let clearArmedUntil = 0;
   let saveTimer = null;
   let storageMode = "IndexedDB";
-  const ui = { editor: null, expandedSolutions: new Set(), revealedHint: 0, previewOpen: false, libraryError: "" };
+  let storageLocked = false;
+  let incompatibleWorkspace = null;
+  const ui = {
+    editor: null,
+    expandedSolutions: new Set(),
+    revealedHint: 0,
+    previewOpen: false,
+    libraryError: "",
+    libraryQuery: "",
+    libraryTopic: "all",
+    librarySort: "official"
+  };
   const root = document.getElementById("view-root");
   const toastRegion = document.getElementById("toast-region");
 
@@ -70,32 +83,45 @@
       async set(key, value) {
         localStorage.setItem(`huixie-${key}`, JSON.stringify(value));
       },
+      async setMany(entries) {
+        for (const [key, value] of entries) localStorage.setItem(`huixie-${key}`, JSON.stringify(value));
+      },
       async clear() {
-        localStorage.removeItem(`huixie-${STATE_KEY}`);
-        localStorage.removeItem(`huixie-${LIBRARIES_KEY}`);
+        Object.keys(localStorage)
+          .filter((key) => key.startsWith("huixie-"))
+          .forEach((key) => localStorage.removeItem(key));
       }
     };
   }
 
   let storage = window.HuixieStorage || storageFallback();
 
+  function applySavedWorkspace(savedState, savedLibraries) {
+    if (Array.isArray(savedLibraries)) customLibraries = savedLibraries.map(normalizeLibrary).filter(Boolean);
+    if (!savedState) return false;
+    const version = Number(savedState.version);
+    if (!Number.isInteger(version) || version < 1 || version > APP_VERSION) {
+      storageLocked = true;
+      incompatibleWorkspace = { state: savedState, libraries: savedLibraries };
+      return true;
+    }
+    state = normalizeState(savedState);
+    return true;
+  }
+
   async function loadWorkspace() {
     try {
       const savedState = await storage.get(STATE_KEY);
       const savedLibraries = await storage.get(LIBRARIES_KEY);
-      if (savedState?.version === APP_VERSION) state = normalizeState(savedState);
-      if (Array.isArray(savedLibraries)) customLibraries = savedLibraries.map(normalizeLibrary).filter(Boolean);
-      if (!savedState) await migrateLegacyState();
+      if (!applySavedWorkspace(savedState, savedLibraries)) await migrateLegacyState();
     } catch (error) {
       console.warn("IndexedDB 不可用，切换到兼容存储", error);
       storage = storageFallback();
       const savedState = await storage.get(STATE_KEY);
       const savedLibraries = await storage.get(LIBRARIES_KEY);
-      if (savedState?.version === APP_VERSION) state = normalizeState(savedState);
-      if (Array.isArray(savedLibraries)) customLibraries = savedLibraries.map(normalizeLibrary).filter(Boolean);
-      if (!savedState) await migrateLegacyState();
+      if (!applySavedWorkspace(savedState, savedLibraries)) await migrateLegacyState();
     }
-    if (!getLibrary(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
+    if (!findLibraryById(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
     if (state.session && !findProblem(state.session.problemId, state.session.libraryId)) state.session = null;
   }
 
@@ -136,12 +162,16 @@
   }
 
   function scheduleSave() {
+    if (storageLocked) return;
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => persistNow().catch(handleSaveError), 120);
   }
 
   async function persistNow() {
-    await Promise.all([storage.set(STATE_KEY, state), storage.set(LIBRARIES_KEY, customLibraries)]);
+    if (storageLocked) throw new Error("检测到较新版本的本机数据，已停止写入以避免覆盖");
+    const entries = [[STATE_KEY, state], [LIBRARIES_KEY, customLibraries]];
+    if (storage.setMany) await storage.setMany(entries);
+    else await Promise.all(entries.map(([key, value]) => storage.set(key, value)));
   }
 
   function handleSaveError(error) {
@@ -153,8 +183,12 @@
     return [builtinLibrary, ...customLibraries];
   }
 
+  function findLibraryById(libraryId) {
+    return allLibraries().find((library) => library.id === libraryId) || null;
+  }
+
   function getLibrary(libraryId = state.activeLibraryId) {
-    return allLibraries().find((library) => library.id === libraryId) || builtinLibrary;
+    return findLibraryById(libraryId) || builtinLibrary;
   }
 
   function activeProblems() {
@@ -241,7 +275,16 @@
     return queue.slice(0, limit);
   }
 
+  function cancelRunner() {
+    runnerGeneration += 1;
+    window.clearTimeout(runnerTimeout);
+    runnerTimeout = null;
+    runner?.terminate();
+    runner = null;
+  }
+
   function setView(view) {
+    cancelRunner();
     saveSessionInputs();
     currentView = view;
     ui.editor = null;
@@ -310,12 +353,35 @@
   function renderLibraries() {
     const library = getLibrary();
     const problems = library.problems || [];
+    const topics = [...new Set(problems.map((problem) => problem.topic || "未分类"))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+    const query = ui.libraryQuery.trim().toLocaleLowerCase("zh-CN");
+    const filtered = problems.filter((problem) => {
+      const matchesTopic = ui.libraryTopic === "all" || (problem.topic || "未分类") === ui.libraryTopic;
+      const haystack = `${problem.number || ""} ${problem.title || ""} ${problem.topic || ""}`.toLocaleLowerCase("zh-CN");
+      return matchesTopic && (!query || haystack.includes(query));
+    });
+    const statusRank = { lapsed: 0, recall: 1, learning: 2, new: 3, mastered: 4 };
+    const visibleProblems = [...filtered].sort((left, right) => {
+      if (ui.librarySort === "number") return Number(left.number || Infinity) - Number(right.number || Infinity);
+      if (ui.librarySort === "title") return left.title.localeCompare(right.title, "zh-CN");
+      if (ui.librarySort === "status") return (statusRank[problemState(left.id, library.id).status] ?? 9) - (statusRank[problemState(right.id, library.id).status] ?? 9);
+      if (ui.librarySort === "topic") return (left.topic || "未分类").localeCompare(right.topic || "未分类", "zh-CN") || Number(left.number || Infinity) - Number(right.number || Infinity);
+      return problems.indexOf(left) - problems.indexOf(right);
+    });
+    const renderRows = (items) => items.map((problem) => {
+      const progress = problemState(problem.id, library.id);
+      return `<article class="problem-row"><button class="problem-open" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}" data-library-id="${escapeHTML(library.id)}"><span class="problem-number">${escapeHTML(problem.number || "—")}</span><span><strong>${escapeHTML(problem.title)}</strong><small>${escapeHTML(problem.topic || "未分类")} · ${(problem.solutions || []).length} 解 · ${(problem.tests || []).length} 测试</small></span><span class="status-text">${escapeHTML(STATUS_LABELS[progress.status] || "未开始")}</span></button>${library.readOnly ? "" : `<button class="row-action" type="button" data-action="edit-problem" data-problem-id="${escapeHTML(problem.id)}">编辑 JSON</button><button class="row-action danger-text" type="button" data-action="delete-problem" data-problem-id="${escapeHTML(problem.id)}">删除</button>`}</article>`;
+    }).join("");
+    const problemIndex = ui.librarySort === "topic"
+      ? [...new Set(visibleProblems.map((problem) => problem.topic || "未分类"))].map((topic) => `<section class="problem-group"><h3>${escapeHTML(topic)}</h3>${renderRows(visibleProblems.filter((problem) => (problem.topic || "未分类") === topic))}</section>`).join("")
+      : renderRows(visibleProblems);
     root.innerHTML = `
       <section class="page-view library-page">
         <header class="page-heading split-heading">
           <div><h1>题库</h1><p>内置题库保持只读；自定义题库可以携带多种 Python 解法和本地测试。</p></div>
           <div class="heading-actions"><button class="quiet-button" type="button" data-action="download-library-template">下载格式示例</button><button class="secondary-button" type="button" data-action="import-library">导入题库</button><button class="primary-button" type="button" data-action="new-library">新建题库</button><input id="library-import-file" type="file" accept="application/json" hidden /></div>
         </header>
+        <p class="import-safety-note"><strong>导入安全：</strong>只运行你信任的题库代码。执行环境会限制网络、同源存储、导入、运行时间和输出大小，但浏览器 Worker 不等同于可证明的安全沙箱。</p>
         ${ui.libraryError ? `<div class="inline-error" role="alert"><strong>导入未完成</strong><span>${escapeHTML(ui.libraryError)}</span></div>` : ""}
         <div class="library-layout">
           <aside class="library-list" aria-label="题库列表">
@@ -327,11 +393,14 @@
               <div class="library-actions">${library.readOnly ? "" : `<button class="quiet-button" type="button" data-action="edit-library">编辑信息</button><button class="quiet-button" type="button" data-action="export-library">导出</button><button class="danger-text" type="button" data-action="delete-library">删除</button><button class="primary-button" type="button" data-action="new-problem">添加题目</button>`}</div>
             </header>
             ${ui.editor ? renderEditor(library) : ""}
+            <div class="library-controls" role="search">
+              <label><span>搜索题目</span><input id="library-search" type="search" value="${escapeHTML(ui.libraryQuery)}" placeholder="题号、标题或主题" autocomplete="off" /></label>
+              <label><span>主题</span><select id="library-topic"><option value="all">全部主题</option>${topics.map((topic) => `<option value="${escapeHTML(topic)}" ${ui.libraryTopic === topic ? "selected" : ""}>${escapeHTML(topic)}</option>`).join("")}</select></label>
+              <label><span>排序</span><select id="library-sort"><option value="official" ${ui.librarySort === "official" ? "selected" : ""}>官方顺序</option><option value="topic" ${ui.librarySort === "topic" ? "selected" : ""}>按主题分组</option><option value="number" ${ui.librarySort === "number" ? "selected" : ""}>按题号</option><option value="title" ${ui.librarySort === "title" ? "selected" : ""}>按标题</option><option value="status" ${ui.librarySort === "status" ? "selected" : ""}>按复习状态</option></select></label>
+              <p class="library-results" aria-live="polite">显示 ${visibleProblems.length} / ${problems.length} 题</p>
+            </div>
             <div class="problem-index">
-              ${problems.length ? problems.map((problem) => {
-                const progress = problemState(problem.id, library.id);
-                return `<article class="problem-row"><button class="problem-open" type="button" data-action="start-problem" data-problem-id="${escapeHTML(problem.id)}" data-library-id="${escapeHTML(library.id)}"><span class="problem-number">${escapeHTML(problem.number || "—")}</span><span><strong>${escapeHTML(problem.title)}</strong><small>${escapeHTML(problem.topic || "未分类")} · ${(problem.solutions || []).length} 解 · ${(problem.tests || []).length} 测试</small></span><span class="status-text">${escapeHTML(STATUS_LABELS[progress.status] || "未开始")}</span></button>${library.readOnly ? "" : `<button class="row-action" type="button" data-action="edit-problem" data-problem-id="${escapeHTML(problem.id)}">编辑 JSON</button><button class="row-action danger-text" type="button" data-action="delete-problem" data-problem-id="${escapeHTML(problem.id)}">删除</button>`}</article>`;
-              }).join("") : `<div class="empty-state compact"><h3>还没有题目</h3><p>添加第一道题，或导入完整题库。</p></div>`}
+              ${problems.length ? problemIndex || `<div class="empty-state compact"><h3>没有匹配题目</h3><p>调整搜索词、主题或排序条件。</p></div>` : `<div class="empty-state compact"><h3>还没有题目</h3><p>添加第一道题，或导入完整题库。</p></div>`}
             </div>
           </section>
         </div>
@@ -386,6 +455,7 @@
     root.innerHTML = `
       <section class="page-view">
         <header class="page-heading"><h1>设置与数据</h1><p>所有题库、代码和复习记录默认只保存在当前浏览器。</p></header>
+        ${storageLocked ? `<div class="inline-error" role="alert"><strong>检测到较新版本的数据</strong><span>为避免覆盖，当前工作台已停止自动保存。请先导出原始数据，再使用兼容版本打开或清除本机数据。</span></div>` : ""}
         <div class="settings-layout">
           <form class="settings-form" id="settings-form"><span class="instrument-label">DAILY LOAD</span><h2>每日复习预算</h2><div class="radio-row">${[15, 25, 45].map((minutes) => `<label><input type="radio" name="minutes" value="${minutes}" ${state.settings.minutes === minutes ? "checked" : ""} /><span>${minutes} 分钟</span></label>`).join("")}</div><p>预算只影响每日队列长度，不会删除到期题或制造连续签到压力。</p><button class="primary-button" type="submit">保存设置</button></form>
           <aside class="data-panel"><span class="instrument-label">LOCAL DATA / ${escapeHTML(storageMode)}</span><h2>备份整个工作台</h2><p>备份包含自定义题库、代码草稿与复习记录。导入会替换当前本机数据。</p><div class="data-actions"><button class="secondary-button" type="button" data-action="export-backup">导出备份</button><button class="secondary-button" type="button" data-action="import-backup">导入备份</button><input id="backup-import-file" type="file" accept="application/json" hidden /><button class="danger-button" type="button" data-action="clear-data">清除本机数据</button></div>${state.migratedAt ? `<p class="migration-note">旧版 localStorage 进度已于 ${escapeHTML(new Intl.DateTimeFormat("zh-CN").format(new Date(state.migratedAt)))} 迁移。</p>` : ""}</aside>
@@ -429,6 +499,7 @@
     currentView = "practice";
     updateNavigation();
     render();
+    focusPracticeStage();
   }
 
   function renderPractice() {
@@ -443,7 +514,7 @@
     root.innerHTML = `
       <section class="practice-view">
         <header class="practice-header"><button class="back-button" type="button" data-action="leave-practice">返回</button><div><h1>${escapeHTML(problem.title)}</h1><p>LC ${escapeHTML(problem.number || "—")} · ${escapeHTML(problem.topic || "未分类")} · ${escapeHTML(problem.signature || "")}</p></div><span>PYTHON 3</span></header>
-        <ol class="recall-track" aria-label="回写进度">${stages.map((label, index) => `<li class="${index < session.stage ? "is-complete" : ""} ${index === session.stage ? "is-current" : ""}"><span>${index + 1}</span><b>${label}</b></li>`).join("")}</ol>
+        <ol class="recall-track" aria-label="回写进度">${stages.map((label, index) => `<li class="${index < session.stage ? "is-complete" : ""} ${index === session.stage ? "is-current" : ""}" ${index === session.stage ? 'aria-current="step"' : ""}><span>${index + 1}</span><b>${label}</b>${index < session.stage ? '<span class="visually-hidden">已完成</span>' : ""}</li>`).join("")}</ol>
         <div class="practice-surface">${renderPracticeStage(problem, progress, session)}</div>
       </section>`;
     bindPracticeInputs(problem, progress);
@@ -467,7 +538,7 @@
 
   function renderWriteStage(problem, progress, session) {
     return `<div class="write-layout">
-      <section class="code-workbench"><header><div><span class="instrument-label">REWRITE / PYTHON 3</span><h2>${escapeHTML(problem.signature || "solve(...)")}</h2></div><div><button class="quiet-button" type="button" data-action="reset-code">重置</button><button class="quiet-button" type="button" data-action="back-stage">返回回忆</button></div></header><textarea id="code-editor" aria-label="Python 代码编辑器" spellcheck="false">${escapeHTML(progress.draft || problem.starter || "")}</textarea><div class="code-actions"><span>⌘ / Ctrl + Enter 运行</span><div><button class="secondary-button" type="button" data-action="go-compare">先去对照</button><button class="primary-button" type="button" data-action="run-tests">运行 ${problem.tests?.length || 0} 组测试</button></div></div></section>
+      <section class="code-workbench"><header><div><span class="instrument-label">REWRITE / PYTHON 3</span><h2>${escapeHTML(problem.signature || "solve(...)")}</h2></div><div><button class="quiet-button" type="button" data-action="reset-code">重置</button><button class="quiet-button" type="button" data-action="back-stage">返回回忆</button></div></header><textarea id="code-editor" aria-label="Python 代码编辑器" aria-describedby="editor-keyboard-help" spellcheck="false">${escapeHTML(progress.draft || problem.starter || "")}</textarea><div class="code-actions"><span id="editor-keyboard-help">Tab 缩进 · Shift+Tab 或 Esc 后按 Tab 离开 · ⌘ / Ctrl + Enter 运行</span><div><button class="secondary-button" type="button" data-action="go-compare">先去对照</button><button class="primary-button" type="button" data-action="run-tests">运行 ${problem.tests?.length || 0} 组测试</button></div></div></section>
       <aside class="test-console" id="test-console" aria-live="polite">${renderTestResults(session.testResults)}<p class="console-note">本地测试只用于学习反馈；最终结果以官方平台为准。</p></aside>
     </div>`;
   }
@@ -505,12 +576,18 @@
 
   function bindPracticeInputs(problem, progress) {
     const editor = document.getElementById("code-editor");
+    let leaveEditorOnTab = false;
     editor?.addEventListener("input", () => {
       progress.draft = editor.value;
       scheduleSave();
     });
     editor?.addEventListener("keydown", (event) => {
-      if (event.key === "Tab") {
+      if (event.key === "Escape") {
+        leaveEditorOnTab = true;
+        showToast("已准备离开编辑器；现在按 Tab 可移到下一项。", 2200);
+        return;
+      }
+      if (event.key === "Tab" && !event.shiftKey && !leaveEditorOnTab) {
         event.preventDefault();
         const start = editor.selectionStart;
         const end = editor.selectionEnd;
@@ -518,6 +595,7 @@
         editor.selectionStart = editor.selectionEnd = start + 4;
         editor.dispatchEvent(new Event("input"));
       }
+      if (event.key === "Tab") leaveEditorOnTab = false;
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         runTests(problem);
@@ -536,12 +614,24 @@
     if (!state.session) return;
     saveSessionInputs();
     state.session.stage = Math.max(0, Math.min(3, stage));
+    if (state.session.stage !== 1) cancelRunner();
     scheduleSave();
     renderPractice();
+    focusPracticeStage();
     window.scrollTo({ top: 0, behavior: "auto" });
   }
 
+  function focusPracticeStage() {
+    const target = state.session?.stage === 1
+      ? document.getElementById("code-editor")
+      : document.querySelector(".practice-surface h2");
+    if (!target) return;
+    if (target.tagName !== "TEXTAREA") target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }
+
   function resetCode() {
+    cancelRunner();
     const problem = findProblem(state.session.problemId, state.session.libraryId);
     const progress = ensureProblemState(problem.id, state.session.libraryId);
     progress.draft = problem.starter || "def solve(...):\n    pass";
@@ -569,18 +659,32 @@
     consoleNode.innerHTML = `<p class="console-idle">LOADING · 正在启动浏览器内 Python 环境……</p>`;
     const runButton = document.querySelector('[data-action="run-tests"]');
     if (runButton) { runButton.disabled = true; runButton.textContent = "正在运行"; }
-    if (runner) runner.terminate();
-    runner = new Worker("./pyodide-worker.js?v=4", { type: "module" });
-    runnerTimeout = window.setTimeout(() => {
-      runner?.terminate();
-      runner = null;
-      consoleNode.innerHTML = `<p class="fail"><strong>TIMEOUT</strong><span>运行超过 45 秒，请检查死循环。</span></p>`;
-      if (runButton) { runButton.disabled = false; runButton.textContent = "重试"; }
-    }, 45000);
-    runner.onmessage = (event) => {
+    cancelRunner();
+    const runId = ++runnerGeneration;
+    const sessionKey = `${state.session.libraryId}:${state.session.problemId}`;
+    const activeRunner = new Worker("./pyodide-worker.js?v=5", { type: "module" });
+    runner = activeRunner;
+    const isCurrentRun = () => runner === activeRunner
+      && runnerGeneration === runId
+      && state.session
+      && `${state.session.libraryId}:${state.session.problemId}` === sessionKey
+      && state.session.stage === 1;
+    const armTimeout = (milliseconds, message) => {
+      window.clearTimeout(runnerTimeout);
+      runnerTimeout = window.setTimeout(() => {
+        if (!isCurrentRun()) return;
+        cancelRunner();
+        if (consoleNode.isConnected) consoleNode.innerHTML = `<p class="fail"><strong>TIMEOUT</strong><span>${escapeHTML(message)}</span></p>`;
+        if (runButton?.isConnected) { runButton.disabled = false; runButton.textContent = "重试"; }
+      }, milliseconds);
+    };
+    armTimeout(60000, "Python 环境载入超过 60 秒，请检查网络后重试。");
+    activeRunner.onmessage = (event) => {
+      if (!isCurrentRun()) return;
       const payload = event.data || {};
       if (payload.type === "status") {
         consoleNode.innerHTML = `<p class="console-idle">LOADING · ${escapeHTML(payload.message)}</p>`;
+        if (payload.phase === "runtime-ready") armTimeout(12000, "代码运行超过 12 秒，请检查复杂度或死循环。");
         return;
       }
       window.clearTimeout(runnerTimeout);
@@ -593,13 +697,18 @@
         consoleNode.innerHTML = `<p class="fail"><strong>ERROR</strong><span>${escapeHTML(payload.message || "本地运行失败")}</span></p>`;
       }
       if (runButton) { runButton.disabled = false; runButton.textContent = "再次运行"; }
+      activeRunner.terminate();
+      if (runner === activeRunner) runner = null;
     };
-    runner.onerror = () => {
+    activeRunner.onerror = () => {
+      if (!isCurrentRun()) return;
       window.clearTimeout(runnerTimeout);
       consoleNode.innerHTML = `<p class="fail"><strong>ERROR</strong><span>Python 环境载入失败，代码已保存。</span></p>`;
       if (runButton) { runButton.disabled = false; runButton.textContent = "重试"; }
+      activeRunner.terminate();
+      if (runner === activeRunner) runner = null;
     };
-    runner.postMessage({ code, tests: problem.tests, compare: problem.compare || "exact" });
+    activeRunner.postMessage({ code, tests: problem.tests, compare: problem.compare || "exact" });
   }
 
   function predictReview(rating, previousInterval) {
@@ -612,6 +721,7 @@
   }
 
   function finishSession() {
+    cancelRunner();
     const session = state.session;
     if (!session?.rating) return showToast("先选择真实的回忆评分。", 2600);
     const problem = findProblem(session.problemId, session.libraryId);
@@ -639,6 +749,7 @@
     try {
       if (!input || typeof input !== "object") return null;
       const id = textField(input.id || `library-${crypto.randomUUID?.() || Date.now()}`, "题库 ID", 100);
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(id)) throw new Error("题库 ID 只能包含字母、数字、下划线和连字符");
       const name = textField(input.name, "题库名称", 60);
       const description = optionalText(input.description, 180);
       if (!Array.isArray(input.problems) || input.problems.length > 500) throw new Error("problems 必须是最多 500 项的数组");
@@ -687,7 +798,7 @@
       hints: (Array.isArray(input.hints) ? input.hints : []).slice(0, 6).map((item) => optionalText(item, 600)),
       solutions: solutions.map((solution, solutionIndex) => validateSolution(solution, id, solutionIndex)),
       tests: tests.map((test, testIndex) => validateTest(test, id, testIndex)),
-      compare: ["exact", "unordered", "nestedUnordered"].includes(input.compare) ? input.compare : "exact"
+      compare: COMPARE_MODES.includes(input.compare) ? input.compare : "exact"
     };
   }
 
@@ -715,7 +826,7 @@
     if (payload?.schema !== "huixie.problem-library" || payload?.version !== 1) throw new Error("需要 schema 为 huixie.problem-library、version 为 1 的题库文件");
     const library = normalizeLibrary(payload.library);
     if (!library) throw new Error("题库结构无效，请检查名称、题目、解法和测试字段");
-    if (customLibraries.some((item) => item.id === library.id)) library.id = `${library.id}-${Date.now().toString(36)}`;
+    if (findLibraryById(library.id)) library.id = `${library.id === BUILTIN_LIBRARY_ID ? "imported-hot100" : library.id}-${Date.now().toString(36)}`;
     return library;
   }
 
@@ -795,6 +906,11 @@
   }
 
   function exportBackup() {
+    if (storageLocked && incompatibleWorkspace) {
+      downloadJson({ schema: "huixie.incompatible-workspace", exportedAt: new Date().toISOString(), ...incompatibleWorkspace }, `huixie-incompatible-data-${isoDate(new Date())}.json`);
+      showToast("较新版本的原始数据已导出，当前内容未被覆盖。", 3200);
+      return;
+    }
     downloadJson({ schema: "huixie.workspace-backup", version: APP_VERSION, exportedAt: new Date().toISOString(), state, libraries: customLibraries }, `huixie-backup-${isoDate(new Date())}.json`);
     showToast("工作台备份已导出。", 1800);
   }
@@ -805,10 +921,17 @@
       if (!Array.isArray(payload.libraries)) throw new Error("备份中缺少题库列表");
       const libraries = payload.libraries.map((library) => normalizeLibrary(library));
       if (libraries.some((library) => !library)) throw new Error("备份中包含无效题库");
+      const libraryIds = new Set([BUILTIN_LIBRARY_ID]);
+      for (const library of libraries) {
+        if (libraryIds.has(library.id)) throw new Error(`备份中包含保留或重复的题库 ID：${library.id}`);
+        libraryIds.add(library.id);
+      }
       state = normalizeState(payload.state || {});
       state.session = null;
       customLibraries = libraries;
-      if (!getLibrary(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
+      if (!findLibraryById(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
+      storageLocked = false;
+      incompatibleWorkspace = null;
       persistNow().catch(handleSaveError);
       currentView = "today";
       updateNavigation();
@@ -876,7 +999,7 @@
       renderPractice();
     }
     else if (action === "copy-code") copyCode(target);
-    else if (action === "select-library") { state.activeLibraryId = target.dataset.libraryId; ui.editor = null; scheduleSave(); renderLibraries(); }
+    else if (action === "select-library") { state.activeLibraryId = target.dataset.libraryId; ui.editor = null; ui.libraryQuery = ""; ui.libraryTopic = "all"; scheduleSave(); renderLibraries(); }
     else if (action === "new-library") { ui.editor = { type: "library", mode: "new" }; renderLibraries(); }
     else if (action === "edit-library") { ui.editor = { type: "library", mode: "edit" }; renderLibraries(); }
     else if (action === "new-problem") { ui.editor = { type: "problem" }; renderLibraries(); }
@@ -964,10 +1087,22 @@
   root.addEventListener("change", (event) => {
     if (event.target.id === "library-import-file") importLibrary(event.target.files?.[0]);
     if (event.target.id === "backup-import-file") importBackup(event.target.files?.[0]);
+    if (event.target.id === "library-topic") { ui.libraryTopic = event.target.value; renderLibraries(); document.getElementById("library-topic")?.focus(); }
+    if (event.target.id === "library-sort") { ui.librarySort = event.target.value; renderLibraries(); document.getElementById("library-sort")?.focus(); }
     if (event.target.closest("#schedule-form") && state.session) {
       state.session.errors = new FormData(event.target.closest("#schedule-form")).getAll("error").map(String);
       scheduleSave();
     }
+  });
+
+  root.addEventListener("input", (event) => {
+    if (event.target.id !== "library-search") return;
+    ui.libraryQuery = event.target.value;
+    const cursor = event.target.selectionStart;
+    renderLibraries();
+    const search = document.getElementById("library-search");
+    search?.focus();
+    search?.setSelectionRange(cursor, cursor);
   });
 
   async function clearAllData(button) {
@@ -983,6 +1118,8 @@
     }
     await storage.clear();
     localStorage.removeItem(LEGACY_KEY);
+    storageLocked = false;
+    incompatibleWorkspace = null;
     state = clone(defaultState);
     customLibraries = [];
     clearArmedUntil = 0;
@@ -993,10 +1130,19 @@
   }
 
   document.querySelectorAll(".top-rail [data-view]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
-  window.addEventListener("beforeunload", saveSessionInputs);
+  window.addEventListener("beforeunload", () => { saveSessionInputs(); cancelRunner(); });
 
   function registerServiceWorker() {
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    if (!("serviceWorker" in navigator)) return;
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let handledUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || handledUpdate) return;
+      handledUpdate = true;
+      if (!state.session) window.location.reload();
+      else showToast("站点已更新；当前草稿已保存，完成本题后刷新即可启用新版。", 6000);
+    });
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
 
   function registerWebMCPTools() {
@@ -1032,6 +1178,7 @@
     currentView = state.session ? "practice" : "today";
     updateNavigation();
     render();
+    if (storageLocked) showToast("检测到较新版本的本机数据；已停止写入，请在设置中导出原始数据。", 7000);
     registerServiceWorker();
     registerWebMCPTools();
     window.huixie = {

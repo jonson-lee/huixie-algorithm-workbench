@@ -140,6 +140,17 @@ pre {
   transform: translateY(0);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .app-shell {
   width: min(1560px, 100%);
   min-height: 100vh;
@@ -216,7 +227,7 @@ pre {
 
 .main-nav button {
   min-width: 70px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 6px 14px;
   border: 0;
   border-radius: 7px;
@@ -263,7 +274,7 @@ pre {
 .row-action,
 .back-button,
 .copy-button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 7px 10px;
   border: 0;
   border-radius: 7px;
@@ -673,6 +684,13 @@ main {
   background: var(--danger-soft);
 }
 
+.import-safety-note {
+  max-width: 76ch;
+  margin: -24px 0 28px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .library-layout {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
@@ -744,6 +762,57 @@ main {
 .library-header p {
   margin-bottom: 0;
   color: var(--muted);
+}
+
+.library-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 16px;
+  border-block: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.library-controls label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.library-controls input,
+.library-controls select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  font-size: 1rem;
+}
+
+.library-results {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font: 700 0.76rem var(--mono);
+  white-space: nowrap;
+}
+
+.problem-group + .problem-group {
+  margin-top: 30px;
+}
+
+.problem-group > h3 {
+  margin: 0;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .problem-index {
@@ -1722,6 +1791,12 @@ main {
   gap: 18px;
 }
 
+.footer-links a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+}
+
 .noscript {
   margin: 20px;
   padding: 16px;
@@ -1866,6 +1941,15 @@ main {
     padding-left: 0;
   }
 
+  .library-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, 0.7fr);
+  }
+
+  .library-controls label:first-child,
+  .library-results {
+    grid-column: 1 / -1;
+  }
+
   .settings-form {
     padding-left: 24px;
     border-right: 0;
@@ -1890,7 +1974,7 @@ main {
 
   .site-footer {
     display: grid;
-    padding-bottom: 30px;
+    padding-bottom: max(30px, env(safe-area-inset-bottom));
   }
 }
 
@@ -1971,6 +2055,17 @@ main {
   .data-actions {
     display: grid;
     width: 100%;
+  }
+
+  .library-controls {
+    grid-template-columns: 1fr;
+    padding-inline: 0;
+    background: transparent;
+  }
+
+  .library-controls label:first-child,
+  .library-results {
+    grid-column: auto;
   }
 
   .problem-row {
@@ -2063,7 +2158,7 @@ main {
   #code-editor {
     min-height: 430px;
     padding: 20px 16px;
-    font-size: 0.82rem;
+    font-size: 1rem;
   }
 
   .code-workbench > header,

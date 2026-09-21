@@ -1,11 +1,10 @@
 (function () {
   "use strict";
 
-  const SOURCE = { label: "站内独立实现" };
   const problems = window.PROBLEMS || (window.PROBLEMS = []);
 
   function solution(name, idea, complexity, code, steps = [], pitfalls = []) {
-    return { name, idea, complexity, code, steps, pitfalls, source: SOURCE };
+    return { name, idea, complexity, code, steps, pitfalls };
   }
 
   function add({ id, number, title, topic, summary, params, signature, hints, tests, solutions, compare = "exact" }) {
@@ -19,7 +18,13 @@
       starter: `def solve(${params}):\n    # TODO: 写下你的解法\n    pass`,
       hints,
       tests,
-      solutions: solutions.map((item, index) => ({ id: `solution-${index + 1}`, ...item })),
+      solutions: solutions.map((item, index) => ({
+        id: `solution-${index + 1}`,
+        ...item,
+        steps: item.steps?.length ? item.steps : hints.slice(0, 2),
+        pitfalls: item.pitfalls?.length ? item.pitfalls : [hints[hints.length - 1]],
+        source: { label: "独立实现 · 题目来源：力扣官方原题", url: `https://leetcode.cn/problems/${id}/` }
+      })),
       compare,
       officialUrl: `https://leetcode.cn/problems/${id}/`
     });
@@ -779,17 +784,22 @@ def solve(values):
         previous = current
         current = following
     return to_list(previous)`),
-      solution("递归回接", "先反转后继链表，再让后继节点指回当前节点并断开旧连接。", "时间 O(n)，递归栈 O(n)。", `${LIST}
-
-def reverse(node):
-    if node is None or node.next is None: return node
-    head = reverse(node.next)
-    node.next.next = node
-    node.next = None
-    return head
+      solution("节点栈重连", "把节点依次压栈，再按弹出顺序重连 next，避免长链触发 Python 递归上限。", "时间 O(n)，空间 O(n)。", `${LIST}
 
 def solve(values):
-    return to_list(reverse(from_list(values)))`)
+    current = from_list(values)
+    nodes = []
+    while current:
+        nodes.append(current)
+        current = current.next
+    if not nodes: return []
+    head = nodes.pop()
+    tail = head
+    while nodes:
+        tail.next = nodes.pop()
+        tail = tail.next
+    tail.next = None
+    return to_list(head)`)
     ]
   });
 
@@ -1048,23 +1058,20 @@ def solve(values, k):
         tail = group_prev.next
         group_prev.next = kth
         group_prev = tail`),
-      solution("递归分组", "确认当前段有 k 个节点后翻转，并把旧头节点连接到下一组结果。", "时间 O(n)，递归栈 O(n/k)。", `${LIST}
-
-def reverse_group(head, k):
-    probe = head
-    for _ in range(k):
-        if probe is None: return head
-        probe = probe.next
-    previous, current = probe, head
-    for _ in range(k):
-        following = current.next
-        current.next = previous
-        previous, current = current, following
-    head.next = reverse_group(probe, k)
-    return previous
+      solution("节点数组分组重连", "先保存节点引用，再逐个翻转完整的 k 长度区间，最后按新顺序重连。", "时间 O(n)，空间 O(n)。", `${LIST}
 
 def solve(values, k):
-    return to_list(reverse_group(from_list(values), k))`)
+    current = from_list(values)
+    nodes = []
+    while current:
+        nodes.append(current)
+        current = current.next
+    for start in range(0, len(nodes) - k + 1, k):
+        nodes[start:start + k] = reversed(nodes[start:start + k])
+    for index in range(len(nodes) - 1):
+        nodes[index].next = nodes[index + 1]
+    if nodes: nodes[-1].next = None
+    return to_list(nodes[0] if nodes else None)`)
     ]
   });
 
@@ -1108,7 +1115,17 @@ def solve(values, random_indices):
     while current:
         current.next.random = None if current.random is None else current.random.next
         current = current.next.next
-    copies = [node.next for node in nodes]
+    copy_head = nodes[0].next if nodes else None
+    current = nodes[0] if nodes else None
+    while current:
+        copy = current.next
+        current.next = copy.next
+        copy.next = copy.next.next if copy.next else None
+        current = current.next
+    copies, current = [], copy_head
+    while current:
+        copies.append(current)
+        current = current.next
     index = {node: i for i, node in enumerate(copies)}
     return [[node.value, None if node.random is None else index[node.random]] for node in copies]`)
     ]
@@ -1334,17 +1351,22 @@ def solve(values):
       { label: "两个节点", args: [[1,2]], expected: 1 }
     ],
     solutions: [
-      solution("后序高度", "每个节点先得到左右高度，用两者之和更新答案，再返回较大高度加一。", "时间 O(n)，递归栈 O(h)。", `${TREE}
+      solution("双栈后序高度", "第一栈生成根右左顺序，第二栈按左右根计算高度和直径。", "时间 O(n)，空间 O(n)。", `${TREE}
 
 def solve(values):
-    best = 0
-    def height(node):
-        nonlocal best
-        if node is None: return 0
-        left, right = height(node.left), height(node.right)
+    root = build_tree(values)
+    if root is None: return 0
+    first, postorder = [root], []
+    while first:
+        node = first.pop(); postorder.append(node)
+        if node.left: first.append(node.left)
+        if node.right: first.append(node.right)
+    heights, best = {}, 0
+    while postorder:
+        node = postorder.pop()
+        left, right = heights.get(node.left, 0), heights.get(node.right, 0)
         best = max(best, left + right)
-        return max(left, right) + 1
-    height(build_tree(values))
+        heights[node] = max(left, right) + 1
     return best`),
       solution("显式后序栈", "用访问标记模拟后序遍历，字典保存已计算的子树高度。", "时间 O(n)，空间 O(n)。", `${TREE}
 
@@ -1389,16 +1411,21 @@ def solve(values):
             if node.right: queue.append(node.right)
         result.append(level)
     return result`),
-      solution("深度优先分层", "递归访问时按 depth 创建或追加对应层的列表。", "时间 O(n)，递归栈 O(h)。", `${TREE}
+      solution("下标队列分层", "用普通列表保存队列并移动读取下标，按每层结束位置切分层次。", "时间 O(n)，空间 O(w)。", `${TREE}
 
 def solve(values):
-    result = []
-    def visit(node, depth):
-        if node is None: return
-        if depth == len(result): result.append([])
-        result[depth].append(node.value)
-        visit(node.left, depth + 1); visit(node.right, depth + 1)
-    visit(build_tree(values), 0)
+    root = build_tree(values)
+    if root is None: return []
+    queue, head, result = [root], 0, []
+    while head < len(queue):
+        level_end = len(queue)
+        level = []
+        while head < level_end:
+            node = queue[head]; head += 1
+            level.append(node.value)
+            if node.left: queue.append(node.left)
+            if node.right: queue.append(node.right)
+        result.append(level)
     return result`)
     ]
   });
@@ -1407,11 +1434,11 @@ def solve(values):
     id: "convert-sorted-array-to-binary-search-tree", number: 108, title: "将有序数组转换为二叉搜索树", topic: "二叉树",
     summary: "把升序数组转换为高度平衡的二叉搜索树，返回其层序表示。",
     params: "nums", signature: "solve(nums) → list",
-    hints: ["选择区间中点作为根，左右区间递归构造子树。", "本站用奇数长度用例保证两种实现输出一致。"],
+    hints: ["选择区间中点作为根，左右区间递归构造子树。", "合法答案不唯一；本地判题会验证中序序列和高度平衡，而不是固定树形。"],
     tests: [
       { label: "五个元素", args: [[-10,-3,0,5,9]], expected: [0,-10,5,null,-3,null,9] },
       { label: "单元素", args: [[1]], expected: [1] }
-    ],
+    ], compare: "balancedBst",
     solutions: [
       solution("递归中点", "每次取区间中点为根，递归构造左右半区。", "时间 O(n)，递归栈 O(log n)。", `${TREE}
 
@@ -1454,14 +1481,18 @@ def solve(nums):
       { label: "深层越界", args: [[5,1,4,null,null,3,6]], expected: false }
     ],
     solutions: [
-      solution("递归上下界", "每个节点必须落在祖先约束形成的开区间内。", "时间 O(n)，递归栈 O(h)。", `${TREE}
+      solution("显式栈上下界", "栈中的每个节点同时携带祖先约束形成的开区间。", "时间 O(n)，空间 O(h)。", `${TREE}
 
 def solve(values):
-    def valid(node, low, high):
-        if node is None: return True
+    root = build_tree(values)
+    stack = [(root, float('-inf'), float('inf'))]
+    while stack:
+        node, low, high = stack.pop()
+        if node is None: continue
         if not low < node.value < high: return False
-        return valid(node.left, low, node.value) and valid(node.right, node.value, high)
-    return valid(build_tree(values), float('-inf'), float('inf'))`),
+        stack.append((node.right, node.value, high))
+        stack.append((node.left, low, node.value))
+    return True`),
       solution("中序严格递增", "中序遍历搜索树会得到严格升序序列，只需比较当前值和前一个值。", "时间 O(n)，空间 O(h)。", `${TREE}
 
 def solve(values):
@@ -1575,11 +1606,19 @@ def solve(values):
 def solve(values):
     root = build_tree(values)
     if root is None: return []
-    stack, result = [root], []
+    stack, previous = [root], None
     while stack:
-        node = stack.pop(); result.append(node.value)
+        node = stack.pop()
         if node.right: stack.append(node.right)
         if node.left: stack.append(node.left)
+        if previous:
+            previous.left = None
+            previous.right = node
+        previous = node
+    result, current = [], root
+    while current:
+        result.append(current.value)
+        current = current.right
     return result`)
     ]
   });
@@ -1594,32 +1633,44 @@ def solve(values):
       { label: "单节点", args: [[1],[1]], expected: [1] }
     ],
     solutions: [
-      solution("递归区间", "用前序指针依次取根，并按中序位置递归构造左右区间。", "时间 O(n)，空间 O(n)。", `${TREE}
+      solution("前序栈重建", "栈保存尚未完成右子树的祖先；中序指针决定新节点应接左侧还是回退后接右侧。", "时间 O(n)，空间 O(n)。", `${TREE}
 
 def solve(preorder, inorder):
-    positions = {value: i for i, value in enumerate(inorder)}
-    index = 0
-    def build(left, right):
-        nonlocal index
-        if left > right: return None
-        value = preorder[index]; index += 1
-        node = TreeNode(value)
-        middle = positions[value]
-        node.left = build(left, middle - 1)
-        node.right = build(middle + 1, right)
-        return node
-    return tree_to_list(build(0, len(inorder) - 1))`),
-      solution("切片递归", "每层直接切分左右遍历序列，代码直观但会重复复制数组。", "时间 O(n²)，空间 O(n²)。", `${TREE}
-
-def build(preorder, inorder):
-    if not preorder: return None
+    if not preorder: return []
     root = TreeNode(preorder[0])
-    middle = inorder.index(preorder[0])
-    root.left = build(preorder[1:middle + 1], inorder[:middle])
-    root.right = build(preorder[middle + 1:], inorder[middle + 1:])
-    return root
+    stack = [root]
+    inorder_index = 0
+    for value in preorder[1:]:
+        node = stack[-1]
+        if node.value != inorder[inorder_index]:
+            node.left = TreeNode(value)
+            stack.append(node.left)
+            continue
+        while stack and stack[-1].value == inorder[inorder_index]:
+            node = stack.pop()
+            inorder_index += 1
+        node.right = TreeNode(value)
+        stack.append(node.right)
+    return tree_to_list(root)`),
+      solution("区间任务栈", "用显式任务栈保存父节点、左右区间和挂接方向，按前序顺序逐个创建根。", "时间 O(n)，空间 O(n)。", `${TREE}
 
-def solve(preorder, inorder): return tree_to_list(build(preorder, inorder))`)
+def solve(preorder, inorder):
+    if not preorder: return []
+    positions = {value: index for index, value in enumerate(inorder)}
+    root = TreeNode(preorder[0])
+    preorder_index = 1
+    tasks = [(root, positions[root.value] + 1, len(inorder) - 1, False), (root, 0, positions[root.value] - 1, True)]
+    while tasks:
+        parent, left, right, attach_left = tasks.pop()
+        if left > right: continue
+        value = preorder[preorder_index]; preorder_index += 1
+        node = TreeNode(value)
+        if attach_left: parent.left = node
+        else: parent.right = node
+        middle = positions[value]
+        tasks.append((node, middle + 1, right, False))
+        tasks.append((node, left, middle - 1, True))
+    return tree_to_list(root)`)
     ]
   });
 
@@ -1670,15 +1721,28 @@ def solve(values, target):
       { label: "一个节点是祖先", args: [[3,5,1,6,2,0,8,null,null,7,4], 5, 4], expected: 5 }
     ],
     solutions: [
-      solution("递归回传目标", "当前节点命中即回传；左右都非空时当前节点是分叉点。", "时间 O(n)，递归栈 O(h)。", `${TREE}
+      solution("节点父指针回溯", "迭代记录节点对象的父节点，先收集 p 的祖先，再沿 q 的祖先链寻找首个交点。", "时间 O(n)，空间 O(n)。", `${TREE}
 
 def solve(values, p, q):
-    def lca(node):
-        if node is None or node.value == p or node.value == q: return node
-        left, right = lca(node.left), lca(node.right)
-        if left and right: return node
-        return left or right
-    return lca(build_tree(values)).value`),
+    root = build_tree(values)
+    parent = {root: None}
+    targets = {}
+    stack = [root]
+    while stack and len(targets) < 2:
+        node = stack.pop()
+        if node.value == p: targets[p] = node
+        if node.value == q: targets[q] = node
+        for child in (node.left, node.right):
+            if child:
+                parent[child] = node
+                stack.append(child)
+    ancestors = set()
+    node = targets[p]
+    while node is not None:
+        ancestors.add(node); node = parent[node]
+    node = targets[q]
+    while node not in ancestors: node = parent[node]
+    return node.value`),
       solution("父指针祖先集合", "遍历构建值到父值的映射，把 p 的祖先放入集合，再向上移动 q。", "时间 O(n)，空间 O(n)。", `${TREE}
 
 def solve(values, p, q):
@@ -1708,18 +1772,23 @@ def solve(values, p, q):
       { label: "全负节点", args: [[-3,-2,-5]], expected: -2 }
     ],
     solutions: [
-      solution("后序最大贡献", "子树向上返回最大单侧贡献；左右正贡献加当前值更新全局答案。", "时间 O(n)，递归栈 O(h)。", `${TREE}
+      solution("双栈最大贡献", "先生成逆后序节点序列，再自底向上计算单侧贡献和完整路径候选。", "时间 O(n)，空间 O(n)。", `${TREE}
 
 def solve(values):
-    best = float('-inf')
-    def gain(node):
-        nonlocal best
-        if node is None: return 0
-        left = max(0, gain(node.left))
-        right = max(0, gain(node.right))
+    root = build_tree(values)
+    first, postorder = [root], []
+    while first:
+        node = first.pop()
+        if node is None: continue
+        postorder.append(node)
+        first.extend((node.left, node.right))
+    gains, best = {}, float('-inf')
+    while postorder:
+        node = postorder.pop()
+        left = max(0, gains.get(node.left, 0))
+        right = max(0, gains.get(node.right, 0))
         best = max(best, node.value + left + right)
-        return node.value + max(left, right)
-    gain(build_tree(values))
+        gains[node] = node.value + max(left, right)
     return best`),
       solution("显式后序动态规划", "栈模拟后序，字典保存每个节点向上的最大贡献。", "时间 O(n)，空间 O(n)。", `${TREE}
 
@@ -1814,18 +1883,27 @@ def solve(course_count, prerequisites):
             indegree[course] -= 1
             if indegree[course] == 0: queue.append(course)
     return taken == course_count`),
-      solution("三色深度优先", "0 未访问、1 在当前路径、2 已完成；遇到颜色 1 即发现环。", "时间 O(V+E)，空间 O(V+E)。", `def solve(course_count, prerequisites):
+      solution("迭代三色深度优先", "0 未访问、1 在当前路径、2 已完成；显式栈记录邻接表读取位置，遇到颜色 1 即发现环。", "时间 O(V+E)，空间 O(V+E)。", `def solve(course_count, prerequisites):
     graph = [[] for _ in range(course_count)]
     for course, before in prerequisites: graph[before].append(course)
     color = [0] * course_count
-    def visit(course):
-        if color[course] == 1: return False
-        if color[course] == 2: return True
-        color[course] = 1
-        if not all(visit(next_course) for next_course in graph[course]): return False
-        color[course] = 2
-        return True
-    return all(visit(course) for course in range(course_count))`)
+    for start in range(course_count):
+        if color[start] != 0: continue
+        color[start] = 1
+        stack = [(start, 0)]
+        while stack:
+            course, edge_index = stack[-1]
+            if edge_index == len(graph[course]):
+                color[course] = 2
+                stack.pop()
+                continue
+            next_course = graph[course][edge_index]
+            stack[-1] = (course, edge_index + 1)
+            if color[next_course] == 1: return False
+            if color[next_course] == 0:
+                color[next_course] = 1
+                stack.append((next_course, 0))
+    return True`)
     ]
   });
 
@@ -1883,7 +1961,7 @@ def solve(operations):
     tests: [
       { label: "三个数字", args: [[1,2,3]], expected: [[1,2,3],[1,3,2],[2,1,3],[2,3,1],[3,1,2],[3,2,1]] },
       { label: "单个数字", args: [[0]], expected: [[0]] }
-    ], compare: "nestedUnordered",
+    ], compare: "outerUnordered",
     solutions: [
       solution("路径加已用标记", "每层选择一个尚未使用的数字加入路径，回溯时撤销标记。", "时间 O(n·n!)，空间 O(n)。", `def solve(nums):
     result, path = [], []
@@ -2078,7 +2156,7 @@ def solve(operations):
     tests: [
       { label: "四皇后", args: [4], expected: [[".Q..","...Q","Q...","..Q."],["..Q.","Q...","...Q",".Q.."]] },
       { label: "一皇后", args: [1], expected: [["Q"]] }
-    ],
+    ], compare: "outerUnordered",
     solutions: [
       solution("集合剪枝", "逐行尝试列，用三个集合判断列与两类对角线冲突。", "时间 O(n!)，空间 O(n)。", `def solve(n):
     result, board = [], [['.'] * n for _ in range(n)]
@@ -2156,7 +2234,7 @@ def solve(nums, target):
         if value < target: left = mid + 1
         else: right = mid - 1
     return False`),
-      solution("先定位行再定位列", "先按每行首值找到候选行，再在该行中二分。", "时间 O(log m+log n)，空间 O(1)。", `from bisect import bisect_right, bisect_left
+      solution("先定位行再定位列", "先按每行首值找到候选行，再在该行中二分。", "时间 O(m+log n)，空间 O(m)；首值列表的构造占 O(m)。", `from bisect import bisect_right, bisect_left
 
 def solve(matrix, target):
     if not matrix: return False
@@ -2917,7 +2995,7 @@ def solve(nums):
     tests: [
       { label: "偶数长度回文", args: ["cbbd"], expected: "bb" },
       { label: "完整回文", args: ["abacaba"], expected: "abacaba" }
-    ],
+    ], compare: "longestPalindrome",
     solutions: [
       solution("中心扩展", "从每个单字符中心和双字符中心向两边扩展，并记录最长区间。", "时间 O(n²)，空间 O(1)。", `def solve(text):
     best_start = best_len = 0
@@ -3099,12 +3177,16 @@ def solve(nums):
         nums[pivot], nums[successor] = nums[successor], nums[pivot]
     nums[pivot + 1:] = reversed(nums[pivot + 1:])
     return nums`),
-      solution("枚举排列基线", "生成并排序所有不同排列，找到当前排列的下一个位置。仅用于理解字典序定义。", "时间 O(n!·n)，空间 O(n!·n)。", `from itertools import permutations
-
-def solve(nums):
-    ordered = sorted(set(permutations(nums)))
-    index = ordered.index(tuple(nums))
-    return list(ordered[(index + 1) % len(ordered)])`)
+      solution("后缀排序", "枢轴与刚好更大的后继交换后，把后缀排序成最小字典序；比原地翻转多用排序。", "时间 O(n log n)，空间 O(n)。", `def solve(nums):
+    pivot = len(nums) - 2
+    while pivot >= 0 and nums[pivot] >= nums[pivot + 1]:
+        pivot -= 1
+    if pivot < 0:
+        return sorted(nums)
+    successor = min((value, index) for index, value in enumerate(nums[pivot + 1:], pivot + 1) if value > nums[pivot])[1]
+    nums[pivot], nums[successor] = nums[successor], nums[pivot]
+    nums[pivot + 1:] = sorted(nums[pivot + 1:])
+    return nums`)
     ]
   });
 

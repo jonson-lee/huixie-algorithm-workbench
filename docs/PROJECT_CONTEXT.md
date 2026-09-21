@@ -4,7 +4,7 @@
 
 “回写”是面向已有编程经验用户的免费算法记忆与复习工具。核心闭环不是刷完成数，而是：回忆识别信号和步骤，从空白写出 Python 解法，按需展开多种参考解法进行对照，最后安排复习。
 
-`0.3.0` 已于 2026-09-21 发布到 Cloud Studio 公开预览。该版本完整覆盖当前 Hot 100，并保持从题目识别直接进入代码回写的简洁流程；确认范围见 `docs/UPDATE_1_REQUIREMENTS.md`。
+`0.3.1` 于 2026-09-21 完成发布后加固。该版本完整覆盖当前 Hot 100，并修复语义判题、跨题 Worker 竞态、深输入边界、存储升级和 Cloud Studio 打包问题；确认范围见 `docs/UPDATE_1_REQUIREMENTS.md`。
 
 ## 当前实现
 
@@ -15,6 +15,7 @@
 - `dist/storage.js` 封装 IndexedDB；不可用时降级到 `localStorage` 兼容模式。
 - `dist/app.js` 负责四阶段回写、个性化队列、题库管理、导入校验、间隔复习及 WebMCP。
 - `dist/pyodide-worker.js` 在模块化 Web Worker 中运行 Python。
+- `dist/judge.js` 为浏览器 Worker 与 Node 内容校验提供同一套答案比较规则。
 - `dist/pyodide/` 自托管 Pyodide 314.0.6 核心文件及 MPL-2.0 许可证。
 - `dist/service-worker.js` 缓存站点外壳，并在后续请求中缓存同源运行时文件。
 - `.openai/hosting.json` 绑定 Sites 私有托管项目。
@@ -35,6 +36,7 @@ node --check dist/storage.js
 node --check dist/pyodide-worker.js
 node --check dist/service-worker.js
 node scripts/verify-content.mjs
+node scripts/verify-regressions.mjs
 python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 ```
 
@@ -45,10 +47,11 @@ python3 -m http.server 4173 --directory dist --bind 127.0.0.1
 - `.vscode/preview.yml` 使用 `python3 -m http.server` 在 8080 端口提供 `dist/`。
 - Cloud Studio 启动后会生成 `*.cloudstudio.club` 公开预览地址；工作空间休眠或停止时，该地址不可访问。
 - Cloud Studio 版本从 jsDelivr 加载 Pyodide 314.0.6，以减小上传包；Python 代码仍只在浏览器本地执行。
-- 2026-09-21 已将 `0.3.0` 上传并解压到 Cloud Studio，公开地址已切换到新版。
+- `scripts/build-cloudstudio-release.sh` 负责替换 CDN Worker、生成压缩包并检查运行时引用，避免手工打包遗漏。
+- `0.3.1` 的发布包应由该脚本生成；具体公开 URL 不写入仓库。
 - 线上验收已确认回忆页显示“先在脑中走一遍”和“开始默写”，且不再出现“写下代码之前的两件事”。
 - 线上验收已确认内置题库显示完整 100 题，每题显示 2 种解法，并保留自定义题库管理入口。
-- 发布前本地内容校验通过：100 份 starter 可编译，200 份参考实现通过 426 次解法用例组合；浏览器 Pyodide 实测新增题目“N 皇后”全部通过。
+- 发布前本地内容校验包括：100 份 starter、200 份参考实现、426 次解法用例组合，以及语义比较器和大输入边界回归测试。
 
 ## 内容与品牌边界
 

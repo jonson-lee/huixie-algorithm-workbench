@@ -325,10 +325,10 @@ def solve(nums, k):
       complexity: problem.complexity,
       pitfalls: (problem.hints || []).slice(-2),
       code: problem.solution,
-      source: { label: "站内独立实现" }
+      source: { label: "独立实现 · 题目来源：力扣官方原题", url: problem.officialUrl }
     };
     const alternate = variants[problem.id]
-      ? { id: "alternate", ...variants[problem.id], source: { label: "站内独立实现" } }
+      ? { id: "alternate", ...variants[problem.id], source: { label: "独立实现 · 题目来源：力扣官方原题", url: problem.officialUrl } }
       : null;
     return { ...problem, solutions: [primary, alternate].filter(Boolean) };
   });

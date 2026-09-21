@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import vm from "node:vm";
 import { spawnSync } from "node:child_process";
+import { compareAnswer, COMPARE_MODES } from "../dist/judge.js";
 
 const source = fs.readFileSync(new URL("../dist/problems.js", import.meta.url), "utf8");
 const variantsSource = fs.readFileSync(new URL("../dist/solution-variants.js", import.meta.url), "utf8");
@@ -18,20 +19,6 @@ const expectedHot100Numbers = [
   763, 70, 118, 198, 279, 322, 139, 300, 152, 416, 32, 62, 64, 5, 1143, 72, 136, 169, 75, 31, 287
 ];
 
-function normalize(value, mode) {
-  if (mode === "unordered") {
-    return [...value].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  }
-
-  if (mode === "nestedUnordered") {
-    return value
-      .map((item) => (Array.isArray(item) ? [...item].sort((a, b) => a - b) : item))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  }
-
-  return value;
-}
-
 let failures = 0;
 
 const ids = new Set();
@@ -47,6 +34,10 @@ for (const problem of problems) {
   }
   ids.add(problem.id);
   numbers.add(Number(problem.number));
+  if (!COMPARE_MODES.includes(problem.compare || "exact")) {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: unsupported compare mode ${problem.compare}`);
+  }
   if (!Array.isArray(problem.solutions) || problem.solutions.length < 2) {
     failures += 1;
     console.error(`FAIL ${problem.id}: expected at least 2 solutions`);
@@ -93,8 +84,7 @@ for (const problem of problems) {
       }
 
       const actual = JSON.parse(result.stdout.trim());
-      const pass = JSON.stringify(normalize(actual, problem.compare))
-        === JSON.stringify(normalize(test.expected, problem.compare));
+      const pass = compareAnswer(actual, test.expected, problem.compare, test.args);
 
       if (!pass) {
         failures += 1;

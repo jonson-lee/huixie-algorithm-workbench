@@ -64,6 +64,10 @@
     return transact("readwrite", (store) => store.put(value, key));
   }
 
+  function setMany(entries) {
+    return transact("readwrite", (store) => entries.map(([key, value]) => store.put(value, key)));
+  }
+
   function remove(key) {
     return transact("readwrite", (store) => store.delete(key));
   }
@@ -72,5 +76,5 @@
     return transact("readwrite", (store) => store.clear());
   }
 
-  window.HuixieStorage = { get, set, remove, clear };
+  window.HuixieStorage = { get, set, setMany, remove, clear };
 })();
