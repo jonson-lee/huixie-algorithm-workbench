@@ -4,9 +4,7 @@ import { spawnSync } from "node:child_process";
 import { compareAnswer } from "../dist/judge.js";
 
 const sandbox = { window: {} };
-for (const filename of ["problems.js", "solution-variants.js", "hot100-extra.js"]) {
-  vm.runInNewContext(fs.readFileSync(new URL(`../dist/${filename}`, import.meta.url), "utf8"), sandbox);
-}
+vm.runInNewContext(fs.readFileSync(new URL("../dist/curated-problems.js", import.meta.url), "utf8"), sandbox);
 const problems = sandbox.window.PROBLEMS;
 const byId = new Map(problems.map((problem) => [problem.id, problem]));
 let failures = 0;
@@ -36,20 +34,29 @@ function runSolution(problemId, solutionIndex, args, label, timeout = 5000) {
   }
 }
 
-check(!compareAnswer([[1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3]], byId.get("permutations").tests[0].expected, "outerUnordered"), "duplicate permutations must fail");
-check(compareAnswer([[3, 2, 1], [1, 2, 3], [2, 1, 3], [3, 1, 2], [1, 3, 2], [2, 3, 1]], byId.get("permutations").tests[0].expected, "outerUnordered"), "permutation result order may vary");
-check(compareAnswer([["ate", "tea", "eat"], ["nat", "tan"], ["bat"]], byId.get("group-anagrams").tests[0].expected, "nestedUnordered"), "anagram group order may vary");
+const permutationExpected = byId.get("permutations").tests[0].expected;
+check(!compareAnswer(Array.from({ length: permutationExpected.length }, () => permutationExpected[0]), permutationExpected, "outerUnordered"), "duplicate permutations must fail");
+check(compareAnswer([...permutationExpected].reverse(), permutationExpected, "outerUnordered"), "permutation result order may vary");
+const anagramExpected = byId.get("group-anagrams").tests[0].expected;
+check(compareAnswer([...anagramExpected].reverse().map((group) => [...group].reverse()), anagramExpected, "nestedUnordered"), "anagram group order may vary");
 check(compareAnswer([...byId.get("n-queens").tests[0].expected].reverse(), byId.get("n-queens").tests[0].expected, "outerUnordered"), "N-Queens solution order may vary");
 check(compareAnswer("aba", "bab", "longestPalindrome", ["babad"]), "any longest palindrome is valid");
 check(compareAnswer([0, -3, 9, -10, null, 5], [0, -10, 5, null, -3, null, 9], "balancedBst", [[-10, -3, 0, 5, 9]]), "alternate balanced BST is valid");
 check(!compareAnswer([-10, null, -3, null, 0, null, 5, null, 9], [], "balancedBst", [[-10, -3, 0, 5, 9]]), "unbalanced BST must fail");
+const courseOrderArgs = byId.get("course-schedule-ii").tests[0].args;
+check(compareAnswer([0, 2, 4, 1, 3], [0, 1, 2, 3, 4], "topologicalOrder", courseOrderArgs), "alternate topological order is valid");
+check(!compareAnswer([0, 1, 3, 2, 4], [0, 1, 2, 3, 4], "topologicalOrder", courseOrderArgs), "order that violates a prerequisite must fail");
+check(runSolution("lowest-common-ancestor-of-a-binary-search-tree", 0, [[10, 5, 16, 2, 8, 13, 20], 5, 8], "BST LCA ancestor case") === 5, "BST LCA may equal one target");
+check(runSolution("subtree-of-another-tree", 1, [[9, 4, 12, 2, 6, 10, 14, null, 3], [4, 2, 6, null, null, 3]], "subtree structure case") === false, "subtree comparison preserves null structure");
 
 const missingSteps = problems.flatMap((problem) => problem.solutions.filter((solution) => !solution.steps?.length).map((solution) => `${problem.id}/${solution.name}`));
 const missingPitfalls = problems.flatMap((problem) => problem.solutions.filter((solution) => !solution.pitfalls?.length).map((solution) => `${problem.id}/${solution.name}`));
 const missingSources = problems.flatMap((problem) => problem.solutions.filter((solution) => !solution.source?.url).map((solution) => `${problem.id}/${solution.name}`));
+const ambiguousSources = problems.flatMap((problem) => problem.solutions.filter((solution) => solution.source?.type !== "problem-index").map((solution) => `${problem.id}/${solution.name}`));
 check(missingSteps.length === 0, `${missingSteps.length} solutions missing steps`);
 check(missingPitfalls.length === 0, `${missingPitfalls.length} solutions missing pitfalls`);
 check(missingSources.length === 0, `${missingSources.length} solutions missing source URL`);
+check(ambiguousSources.length === 0, `${ambiguousSources.length} solutions have ambiguous provenance labels`);
 
 const chainSize = 1500;
 const rightChain = [];

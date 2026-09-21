@@ -3,21 +3,10 @@ import vm from "node:vm";
 import { spawnSync } from "node:child_process";
 import { compareAnswer, COMPARE_MODES } from "../dist/judge.js";
 
-const source = fs.readFileSync(new URL("../dist/problems.js", import.meta.url), "utf8");
-const variantsSource = fs.readFileSync(new URL("../dist/solution-variants.js", import.meta.url), "utf8");
-const extraSource = fs.readFileSync(new URL("../dist/hot100-extra.js", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../dist/curated-problems.js", import.meta.url), "utf8");
 const sandbox = { window: {} };
 vm.runInNewContext(source, sandbox);
-vm.runInNewContext(variantsSource, sandbox);
-vm.runInNewContext(extraSource, sandbox);
 const problems = sandbox.window.PROBLEMS;
-const expectedHot100Numbers = [
-  1, 49, 128, 283, 11, 15, 42, 3, 438, 560, 239, 76, 53, 56, 189, 238, 41, 73, 54, 48,
-  240, 160, 206, 234, 141, 142, 21, 2, 19, 24, 25, 138, 148, 23, 146, 94, 104, 226, 101,
-  543, 102, 108, 98, 230, 199, 114, 105, 437, 236, 124, 200, 994, 207, 208, 46, 78, 17, 39,
-  22, 79, 131, 51, 35, 74, 34, 33, 153, 4, 20, 155, 394, 739, 84, 215, 347, 295, 121, 55, 45,
-  763, 70, 118, 198, 279, 322, 139, 300, 152, 416, 32, 62, 64, 5, 1143, 72, 136, 169, 75, 31, 287
-];
 
 let failures = 0;
 
@@ -34,6 +23,22 @@ for (const problem of problems) {
   }
   ids.add(problem.id);
   numbers.add(Number(problem.number));
+  if (problem.curationRank !== ids.size) {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: curationRank must match its one-based position`);
+  }
+  if (problem.contentOrigin !== "huixie-editorial") {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: missing independent editorial origin`);
+  }
+  if (!String(problem.referenceUrl || "").startsWith("https://leetcode.cn/problems/")) {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: invalid external problem index`);
+  }
+  if (Object.hasOwn(problem, "officialUrl")) {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: legacy officialUrl must not appear in curated content`);
+  }
   if (!COMPARE_MODES.includes(problem.compare || "exact")) {
     failures += 1;
     console.error(`FAIL ${problem.id}: unsupported compare mode ${problem.compare}`);
@@ -46,15 +51,15 @@ for (const problem of problems) {
     failures += 1;
     console.error(`FAIL ${problem.id}: expected at least 2 tests`);
   }
+  if (problem.solutions.some((solution) => solution.source?.type !== "problem-index")) {
+    failures += 1;
+    console.error(`FAIL ${problem.id}: solution source must distinguish problem index from solution provenance`);
+  }
 }
 
-const missingNumbers = expectedHot100Numbers.filter((number) => !numbers.has(number));
-const unexpectedNumbers = [...numbers].filter((number) => !expectedHot100Numbers.includes(number));
-if (problems.length !== 100 || missingNumbers.length || unexpectedNumbers.length) {
+if (problems.length !== 150 || numbers.size !== 150) {
   failures += 1;
-  console.error(
-    `FAIL Hot 100 membership: count=${problems.length}, missing=${missingNumbers.join(",") || "none"}, unexpected=${unexpectedNumbers.join(",") || "none"}`
-  );
+  console.error(`FAIL curated set integrity: count=${problems.length}, unique numbers=${numbers.size}`);
 }
 
 for (const problem of problems) {
@@ -103,4 +108,4 @@ if (failures) {
 
 const testCount = problems.reduce((sum, problem) => sum + problem.tests.length * problem.solutions.length, 0);
 const solutionCount = problems.reduce((sum, problem) => sum + problem.solutions.length, 0);
-console.log(`${problems.length} starters compiled; ${solutionCount} solutions passed ${testCount} reference checks`);
+console.log(`${problems.length} curated starters compiled; ${solutionCount} solutions passed ${testCount} independent test checks`);

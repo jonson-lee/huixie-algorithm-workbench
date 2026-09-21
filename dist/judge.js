@@ -81,9 +81,21 @@ function isBalancedSearchTree(actual, args) {
   return true;
 }
 
+function isTopologicalOrder(actual, expected, args) {
+  if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
+  if (expected.length === 0) return actual.length === 0;
+  const count = Number(args?.[0]);
+  const prerequisites = Array.isArray(args?.[1]) ? args[1] : [];
+  if (!Number.isInteger(count) || actual.length !== count || new Set(actual).size !== count) return false;
+  if (actual.some((course) => !Number.isInteger(course) || course < 0 || course >= count)) return false;
+  const position = new Map(actual.map((course, index) => [course, index]));
+  return prerequisites.every(([course, before]) => position.get(before) < position.get(course));
+}
+
 export function compareAnswer(actual, expected, mode = "exact", args = []) {
   if (mode === "longestPalindrome") return isLongestPalindrome(actual, expected, args);
   if (mode === "balancedBst") return isBalancedSearchTree(actual, args);
+  if (mode === "topologicalOrder") return isTopologicalOrder(actual, expected, args);
   return compareKey(normalize(actual, mode)) === compareKey(normalize(expected, mode));
 }
 
@@ -93,5 +105,6 @@ export const COMPARE_MODES = Object.freeze([
   "outerUnordered",
   "nestedUnordered",
   "longestPalindrome",
-  "balancedBst"
+  "balancedBst",
+  "topologicalOrder"
 ]);

@@ -2,7 +2,7 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-release_version=${1:-0.3.1}
+release_version=${1:-0.4.0}
 work_dir="$project_dir/work"
 stage_dir=$(mktemp -d)
 trap 'rm -rf "$stage_dir"' EXIT INT TERM
@@ -22,6 +22,8 @@ rm -f "$archive"
 
 unzip -p "$archive" dist/pyodide-worker.js | grep -q 'cdn.jsdelivr.net/pyodide/v314.0.6/full/pyodide.mjs'
 unzip -Z1 "$archive" | grep -q '^dist/judge.js$'
+unzip -Z1 "$archive" | grep -q '^dist/curated-problems.js$'
+unzip -Z1 "$archive" | grep -q '^dist/CONTENT_NOTICE.txt$'
 if unzip -Z1 "$archive" | grep -q '^dist/pyodide/'; then
   printf 'Cloud Studio archive unexpectedly contains the self-hosted runtime.\n' >&2
   exit 1

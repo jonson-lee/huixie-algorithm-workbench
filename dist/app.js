@@ -2,6 +2,7 @@
   "use strict";
 
   const APP_VERSION = 2;
+  const CONTENT_VERSION = 3;
   const BUILTIN_LIBRARY_ID = "builtin-hot100";
   const STATE_KEY = "state-v2";
   const LIBRARIES_KEY = "libraries-v1";
@@ -9,16 +10,17 @@
   const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
   const ERROR_OPTIONS = ["题型识别错误", "关键不变量遗忘", "边界条件遗漏", "复杂度判断错误", "代码实现错误", "Python API 遗忘"];
   const STATUS_LABELS = { new: "未开始", learning: "记忆中", recall: "待复习", mastered: "已掌握", lapsed: "需重写" };
-  const COMPARE_MODES = ["exact", "unordered", "outerUnordered", "nestedUnordered", "longestPalindrome", "balancedBst"];
+  const COMPARE_MODES = ["exact", "unordered", "outerUnordered", "nestedUnordered", "longestPalindrome", "balancedBst", "topologicalOrder"];
   const builtinLibrary = {
     id: BUILTIN_LIBRARY_ID,
-    name: "Hot 100",
-    description: "内置完整题库 · 100 题",
+    name: "回写精选 150",
+    description: "自编讲解与测试 · 150 题",
     readOnly: true,
     problems: Array.isArray(window.PROBLEMS) ? window.PROBLEMS : []
   };
   const defaultState = {
     version: APP_VERSION,
+    contentVersion: CONTENT_VERSION,
     activeLibraryId: BUILTIN_LIBRARY_ID,
     settings: { minutes: 25 },
     progress: {},
@@ -38,6 +40,7 @@
   let storageMode = "IndexedDB";
   let storageLocked = false;
   let incompatibleWorkspace = null;
+  let contentMigrationPending = false;
   const ui = {
     editor: null,
     expandedSolutions: new Set(),
@@ -46,7 +49,7 @@
     libraryError: "",
     libraryQuery: "",
     libraryTopic: "all",
-    librarySort: "official"
+    librarySort: "curated"
   };
   const root = document.getElementById("view-root");
   const toastRegion = document.getElementById("toast-region");
@@ -105,7 +108,16 @@
       incompatibleWorkspace = { state: savedState, libraries: savedLibraries };
       return true;
     }
+    const savedContentVersion = Number(savedState.contentVersion) || 1;
     state = normalizeState(savedState);
+    if (savedContentVersion < CONTENT_VERSION) {
+      state.contentVersion = CONTENT_VERSION;
+      if (state.session) {
+        state.session.testResults = null;
+        state.session.testsPassed = false;
+      }
+      contentMigrationPending = true;
+    }
     return true;
   }
 
@@ -123,6 +135,10 @@
     }
     if (!findLibraryById(state.activeLibraryId)) state.activeLibraryId = BUILTIN_LIBRARY_ID;
     if (state.session && !findProblem(state.session.problemId, state.session.libraryId)) state.session = null;
+    if (contentMigrationPending) {
+      await persistNow();
+      contentMigrationPending = false;
+    }
   }
 
   function normalizeState(input) {
@@ -130,6 +146,7 @@
       ...clone(defaultState),
       ...input,
       version: APP_VERSION,
+      contentVersion: Number(input.contentVersion) || CONTENT_VERSION,
       settings: { ...defaultState.settings, ...(input.settings || {}) },
       progress: input.progress && typeof input.progress === "object" ? input.progress : {},
       history: Array.isArray(input.history) ? input.history.slice(0, 500) : []
@@ -396,7 +413,7 @@
             <div class="library-controls" role="search">
               <label><span>搜索题目</span><input id="library-search" type="search" value="${escapeHTML(ui.libraryQuery)}" placeholder="题号、标题或主题" autocomplete="off" /></label>
               <label><span>主题</span><select id="library-topic"><option value="all">全部主题</option>${topics.map((topic) => `<option value="${escapeHTML(topic)}" ${ui.libraryTopic === topic ? "selected" : ""}>${escapeHTML(topic)}</option>`).join("")}</select></label>
-              <label><span>排序</span><select id="library-sort"><option value="official" ${ui.librarySort === "official" ? "selected" : ""}>官方顺序</option><option value="topic" ${ui.librarySort === "topic" ? "selected" : ""}>按主题分组</option><option value="number" ${ui.librarySort === "number" ? "selected" : ""}>按题号</option><option value="title" ${ui.librarySort === "title" ? "selected" : ""}>按标题</option><option value="status" ${ui.librarySort === "status" ? "selected" : ""}>按复习状态</option></select></label>
+              <label><span>排序</span><select id="library-sort"><option value="curated" ${ui.librarySort === "curated" ? "selected" : ""}>精选顺序</option><option value="topic" ${ui.librarySort === "topic" ? "selected" : ""}>按主题分组</option><option value="number" ${ui.librarySort === "number" ? "selected" : ""}>按题号</option><option value="title" ${ui.librarySort === "title" ? "selected" : ""}>按标题</option><option value="status" ${ui.librarySort === "status" ? "selected" : ""}>按复习状态</option></select></label>
               <p class="library-results" aria-live="polite">显示 ${visibleProblems.length} / ${problems.length} 题</p>
             </div>
             <div class="problem-index">
@@ -531,7 +548,7 @@
     const hint = ui.revealedHint > 0 ? (problem.hints || [])[ui.revealedHint - 1] || "" : "";
     const preview = ui.previewOpen ? renderSolutions(problem, true) : "";
     return `<div class="recall-layout">
-      <section class="recall-brief"><span class="instrument-label">RECOGNITION SIGNAL</span><h2>先在脑中走一遍</h2><p>${escapeHTML(problem.summary)}</p><dl class="brief-facts"><div><dt>函数</dt><dd><code>${escapeHTML(problem.signature || "")}</code></dd></div><div><dt>解法</dt><dd>${(problem.solutions || []).length} 种可对照</dd></div><div><dt>测试</dt><dd>${(problem.tests || []).length} 组本地用例</dd></div></dl>${safeUrl(problem.officialUrl) ? `<a class="official-link" href="${escapeHTML(safeUrl(problem.officialUrl))}" target="_blank" rel="noreferrer">查看官方原题</a>` : ""}<div class="recall-actions"><button class="primary-button" type="button" data-action="start-writing">开始默写</button><div class="memory-aids"><button class="quiet-button" type="button" data-action="show-hint">${ui.revealedHint ? "再看一条提示" : "给我一个提示"}</button><button class="quiet-button" type="button" data-action="preview-solution">${ui.previewOpen ? "收起参考解法" : "完全忘记，先看参考"}</button></div></div>${hint ? `<div class="hint-output"><strong>提示 ${ui.revealedHint}</strong><p>${escapeHTML(hint)}</p></div>` : ""}</section>
+      <section class="recall-brief"><span class="instrument-label">RECOGNITION SIGNAL</span><h2>先在脑中走一遍</h2><p>${escapeHTML(problem.summary)}</p><dl class="brief-facts"><div><dt>函数</dt><dd><code>${escapeHTML(problem.signature || "")}</code></dd></div><div><dt>解法</dt><dd>${(problem.solutions || []).length} 种可对照</dd></div><div><dt>测试</dt><dd>${(problem.tests || []).length} 组本地用例</dd></div></dl>${safeUrl(problem.referenceUrl || problem.officialUrl) ? `<a class="official-link" href="${escapeHTML(safeUrl(problem.referenceUrl || problem.officialUrl))}" target="_blank" rel="noreferrer">前往题目来源</a>` : ""}<div class="recall-actions"><button class="primary-button" type="button" data-action="start-writing">开始默写</button><div class="memory-aids"><button class="quiet-button" type="button" data-action="show-hint">${ui.revealedHint ? "再看一条提示" : "给我一个提示"}</button><button class="quiet-button" type="button" data-action="preview-solution">${ui.previewOpen ? "收起参考解法" : "完全忘记，先看参考"}</button></div></div>${hint ? `<div class="hint-output"><strong>提示 ${ui.revealedHint}</strong><p>${escapeHTML(hint)}</p></div>` : ""}</section>
       ${preview ? `<aside class="solution-drawer preview-drawer"><header><span class="instrument-label">MEMORY REFRESH</span><h2>看完后合上，再从空白写</h2></header>${preview}</aside>` : ""}
     </div>`;
   }
@@ -539,7 +556,7 @@
   function renderWriteStage(problem, progress, session) {
     return `<div class="write-layout">
       <section class="code-workbench"><header><div><span class="instrument-label">REWRITE / PYTHON 3</span><h2>${escapeHTML(problem.signature || "solve(...)")}</h2></div><div><button class="quiet-button" type="button" data-action="reset-code">重置</button><button class="quiet-button" type="button" data-action="back-stage">返回回忆</button></div></header><textarea id="code-editor" aria-label="Python 代码编辑器" aria-describedby="editor-keyboard-help" spellcheck="false">${escapeHTML(progress.draft || problem.starter || "")}</textarea><div class="code-actions"><span id="editor-keyboard-help">Tab 缩进 · Shift+Tab 或 Esc 后按 Tab 离开 · ⌘ / Ctrl + Enter 运行</span><div><button class="secondary-button" type="button" data-action="go-compare">先去对照</button><button class="primary-button" type="button" data-action="run-tests">运行 ${problem.tests?.length || 0} 组测试</button></div></div></section>
-      <aside class="test-console" id="test-console" aria-live="polite">${renderTestResults(session.testResults)}<p class="console-note">本地测试只用于学习反馈；最终结果以官方平台为准。</p></aside>
+      <aside class="test-console" id="test-console" aria-live="polite">${renderTestResults(session.testResults)}<p class="console-note">本地测试只用于学习反馈；最终结果以题目来源平台为准。</p></aside>
     </div>`;
   }
 
@@ -561,7 +578,8 @@
       const key = `${problem.id}:${solution.id || index}:${previewMode ? "preview" : "compare"}`;
       const expanded = ui.expandedSolutions.has(key);
       const sourceUrl = safeUrl(solution.source?.url);
-      return `<article class="solution-variant ${expanded ? "is-expanded" : ""}"><button class="solution-summary" type="button" data-action="toggle-solution" data-solution-key="${escapeHTML(key)}" aria-expanded="${expanded}"><span><b>${String(index + 1).padStart(2, "0")}</b><strong>${escapeHTML(solution.name || `解法 ${index + 1}`)}</strong><small>${escapeHTML(solution.complexity || "复杂度未填写")}</small></span><i>${expanded ? "收起" : "展开"}</i></button>${expanded ? `<div class="solution-detail"><p class="solution-idea">${escapeHTML(solution.idea || "暂无思路说明")}</p>${Array.isArray(solution.steps) && solution.steps.length ? `<ol>${solution.steps.map((step) => `<li>${escapeHTML(step)}</li>`).join("")}</ol>` : ""}${Array.isArray(solution.pitfalls) && solution.pitfalls.length ? `<div class="pitfalls"><strong>易错点</strong><ul>${solution.pitfalls.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul></div>` : ""}${codeBlock(solution.code || "", solution.name || "参考代码")}${sourceUrl ? `<a class="source-link" href="${escapeHTML(sourceUrl)}" target="_blank" rel="noreferrer">参考来源：${escapeHTML(solution.source.label || sourceUrl)}</a>` : `<span class="source-note">${escapeHTML(solution.source?.label || "站内独立实现")}</span>`}</div>` : ""}</article>`;
+      const sourcePrefix = solution.source?.type === "problem-index" ? "题目索引" : "参考来源";
+      return `<article class="solution-variant ${expanded ? "is-expanded" : ""}"><button class="solution-summary" type="button" data-action="toggle-solution" data-solution-key="${escapeHTML(key)}" aria-expanded="${expanded}"><span><b>${String(index + 1).padStart(2, "0")}</b><strong>${escapeHTML(solution.name || `解法 ${index + 1}`)}</strong><small>${escapeHTML(solution.complexity || "复杂度未填写")}</small></span><i>${expanded ? "收起" : "展开"}</i></button>${expanded ? `<div class="solution-detail"><p class="solution-idea">${escapeHTML(solution.idea || "暂无思路说明")}</p>${Array.isArray(solution.steps) && solution.steps.length ? `<ol>${solution.steps.map((step) => `<li>${escapeHTML(step)}</li>`).join("")}</ol>` : ""}${Array.isArray(solution.pitfalls) && solution.pitfalls.length ? `<div class="pitfalls"><strong>易错点</strong><ul>${solution.pitfalls.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul></div>` : ""}${codeBlock(solution.code || "", solution.name || "参考代码")}${sourceUrl ? `<a class="source-link" href="${escapeHTML(sourceUrl)}" target="_blank" rel="noreferrer">${sourcePrefix}：${escapeHTML(solution.source.label || sourceUrl)}</a>` : `<span class="source-note">${escapeHTML(solution.source?.label || "站内独立实现")}</span>`}</div>` : ""}</article>`;
     }).join("");
   }
 
@@ -662,7 +680,7 @@
     cancelRunner();
     const runId = ++runnerGeneration;
     const sessionKey = `${state.session.libraryId}:${state.session.problemId}`;
-    const activeRunner = new Worker("./pyodide-worker.js?v=5", { type: "module" });
+    const activeRunner = new Worker("./pyodide-worker.js?v=6", { type: "module" });
     runner = activeRunner;
     const isCurrentRun = () => runner === activeRunner
       && runnerGeneration === runId
@@ -794,7 +812,7 @@
       summary: textField(input.summary, `题目 ${id} 的 summary`, 1200),
       signature: optionalText(input.signature || "solve(...) → ...", 160),
       starter: textField(input.starter || "def solve(...):\n    pass", `题目 ${id} 的 starter`, 50000),
-      officialUrl: safeUrl(input.officialUrl),
+      referenceUrl: safeUrl(input.referenceUrl || input.officialUrl),
       hints: (Array.isArray(input.hints) ? input.hints : []).slice(0, 6).map((item) => optionalText(item, 600)),
       solutions: solutions.map((solution, solutionIndex) => validateSolution(solution, id, solutionIndex)),
       tests: tests.map((test, testIndex) => validateTest(test, id, testIndex)),
@@ -826,7 +844,7 @@
     if (payload?.schema !== "huixie.problem-library" || payload?.version !== 1) throw new Error("需要 schema 为 huixie.problem-library、version 为 1 的题库文件");
     const library = normalizeLibrary(payload.library);
     if (!library) throw new Error("题库结构无效，请检查名称、题目、解法和测试字段");
-    if (findLibraryById(library.id)) library.id = `${library.id === BUILTIN_LIBRARY_ID ? "imported-hot100" : library.id}-${Date.now().toString(36)}`;
+    if (findLibraryById(library.id)) library.id = `${library.id === BUILTIN_LIBRARY_ID ? "imported-library" : library.id}-${Date.now().toString(36)}`;
     return library;
   }
 

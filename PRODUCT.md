@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Static, offline-first web application. The MVP uses plain HTML, CSS, and JavaScript; stores learning state on the device; supports Python 3 exercises; and performs learning-oriented local checks in a browser worker. Official LeetCode submission remains the final verification step.
+Static, offline-first web application. The MVP uses plain HTML, CSS, and JavaScript; stores learning state on the device; supports Python 3 exercises; and performs learning-oriented local checks in a browser worker. Submission on the linked problem platform remains the final verification step.
 
 ## Users
 
@@ -16,7 +16,7 @@ The primary users are programmers who already know how to code and want to retai
 
 ## Product Purpose
 
-Provide a completely free memory and review workspace that helps experienced programmers retain the patterns and Python implementations in LeetCode Hot 100, then reproduce them independently.
+Provide a completely free memory and review workspace that helps experienced programmers retain common interview-algorithm patterns and Python implementations, then reproduce them independently.
 
 Success means a learner can progress from understanding a worked solution to recalling the approach, writing correct code, and recognizing the same pattern in a changed problem.
 
@@ -26,11 +26,12 @@ The product is not a general problem bank or a programming course. Its core mech
 
 ## Operating Context
 
-Learners use the website in short daily sessions. A session mixes new examples, recall reviews, coding attempts, and short reflection. The initial curriculum is limited to LeetCode Hot 100.
+Learners use the website in short daily sessions. A session mixes new examples, recall reviews, coding attempts, and short reflection. The initial curriculum is the independently ordered “Huixie Curated 150”.
 
 ## Capabilities and Constraints
 
-- The built-in library focuses only on LeetCode Hot 100; users may manage their own imported libraries.
+- The built-in library contains 150 independently summarized exercises in a Huixie-authored learning order; users may manage their own imported libraries.
+- External problem numbers, short titles, and links are indexing metadata, not reproduced question statements or a claim of affiliation.
 - The experience assumes programming fluency and avoids repeating basic syntax instruction.
 - The learning route and review timing should adapt to each learner.
 - The service is intended to remain free to learners.
@@ -43,7 +44,7 @@ Learners use the website in short daily sessions. A session mixes new examples, 
 
 ## Evidence on Hand
 
-No proprietary question corpus, licensed LeetCode content, user research, benchmark data, or brand assets have been provided. Future work must not invent licensing rights or efficacy claims.
+No proprietary question corpus, licensed third-party problem text, user research, benchmark data, or brand assets have been provided. Future work must not invent licensing rights or efficacy claims.
 
 ## Product Principles
 

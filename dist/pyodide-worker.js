@@ -1,5 +1,5 @@
 import { loadPyodide } from "./pyodide/pyodide.mjs";
-import { compareAnswer } from "./judge.js?v=1";
+import { compareAnswer } from "./judge.js?v=2";
 
 const PYODIDE_ROOT = new URL("./pyodide/", self.location.href).href;
 let pyodidePromise = null;
