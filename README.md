@@ -38,6 +38,10 @@ node scripts/verify-content-policy.mjs
 
 仓库包含 `.vscode/preview.yml`，Cloud Studio 可通过 8080 端口运行 `dist/`。开发工作空间停止或休眠后，临时预览地址也会停止响应。
 
+## Vercel
+
+仓库根目录的 `vercel.json` 将 `dist/` 设为静态输出目录，并为 Service Worker、入口页和全站响应配置更新与安全响应头。导入仓库时选择 `Other`，无需构建命令；Vercel 会直接发布 `dist/`。
+
 ## 内容与隐私边界
 
 - 不抓取或镜像 LeetCode／力扣官方题面、题解、测试与品牌视觉。

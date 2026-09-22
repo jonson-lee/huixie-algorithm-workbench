@@ -3,6 +3,7 @@
 work/
 outputs/
 node_modules/
+.vercel/
 .idea/
 .env
 .env.*
